@@ -1,0 +1,143 @@
+.\"                                      Hey, EMACS: -*- nroff -*-
+.de Vb \" Begin verbatim text
+.ft CW
+.nf
+.ne \\$1
+..
+.de Ve \" End verbatim text
+.ft R
+.fi
+..
+.TH GOLANG-GURU 1 "2016-10-31"
+.\" Please adjust this date whenever revising the manpage.
+.SH NAME
+golang-guru \- Go source code guru
+
+.SH SYNOPSIS
+.B golang-guru
+.RI [
+.IR "flag ..."
+.RI ]
+.RI mode
+.RI position
+
+.SH DESCRIPTION
+
+The mode argument determines the query to perform:
+
+.TP 14
+.B callees
+show possible targets of selected function call
+.TP 14
+.B callers
+show possible callers of selected function
+.TP 14
+.B callstack
+show path from callgraph root to selected function
+.TP 14
+.B definition
+show declaration of selected identifier
+.TP 14
+.B describe
+describe selected syntax: definition, methods, etc
+.TP 14
+.B freevars
+show free variables of selection
+.TP 14
+.B implements
+show 'implements' relation for selected type or method
+.TP 14
+.B peers
+show send/receive corresponding to selected channel op
+.TP 14
+.B pointsto
+show variables the selected pointer may point to
+.TP 14
+.B referrers
+show all refs to entity denoted by selected identifier
+.TP 14
+.B what
+show basic information about the selected syntax node
+.TP 14
+.B whicherrs
+show possible values of the selected error variable
+
+.PP
+The position argument specifies the filename and byte offset (or range)
+of the syntax element to query.  For example:
+
+.Vb 6
+\&	foo.go:#123,#128
+\&	bar.go:#123
+.Ve
+
+.PP
+The user manual is available here:  http://golang.org/s/using-guru
+
+.SH OPTIONS
+
+.TP
+.B \-cpuprofile
+Write CPU profile to file.
+.TP
+.BR "\-format " \fIformat\fR
+Output format:
+
+.B plain
+An editor-friendly format in which every line of output is of the form "pos:
+text", where pos is "-" if unknown. This is the default.
+
+.B json
+Structured data in JSON syntax.
+
+.B xml
+Structured data in XML syntax.
+
+.TP
+.B \-modified
+Read archive of modified files from standard input.
+
+Files in this archive will be used in preference to those in the file system.
+In this way, a text editor may supply guru with the contents of its unsaved
+buffers.  Each archive entry consists of the file name, a newline, the decimal
+file size, another newline, and the contents of the file.
+.TP
+.BR "\-ptalog " \fIfile\fR
+Write points-to analysis log to file.
+.TP
+.B \-reflect
+Analyze reflection soundly (slow).
+.TP
+.BR "\-scope " \fIpackages\fR
+Comma-separated list of packages the analysis should be limited to.
+Its value is a comma-separated list of patterns of these forms:
+.Vb 6
+\&	golang.org/x/tools/cmd/guru	# a single package
+\&	golang.org/x/tools/...		# all packages beneath dir
+\&	...				# the entire workspace.
+.Vb
+
+A pattern preceded by '-' is negative, so the scope
+.Vb 6
+\&	encoding/...,-encoding/xml
+.Ve
+matches all encoding packages except encoding/xml.
+
+.TP
+.BI "\-tags " build_tags
+A list of build tags to consider satisfied during the build. For more
+information about build tags, see the description of build constraints in the
+documentation for the go/build package (default <tagsFlag>).
+
+.SH EXAMPLES
+
+Describe the syntax at offset 530 in this file (an import spec):
+
+.Vb 6
+\&      golang-guru describe src/golang.org/x/tools/cmd/guru/main.go:#530
+.Ve
+
+.SH AUTHOR
+.PP
+This manual page was written by Michael Stapelberg <stapelberg@debian.org>,
+for the Debian project (and may be used by others).

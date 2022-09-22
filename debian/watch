@@ -1,0 +1,4 @@
+version=4
+opts="mode=git, pgpmode=none, dversionmangle=s/\+ds\d*$//, repacksuffix=+ds" \
+  https://github.com/golang/tools \
+  refs/tags/v?@ANY_VERSION@ debian

@@ -1,0 +1,66 @@
+#!/usr/bin/make -f
+# -*- makefile -*-
+
+# Excluded binaries. List all binary names:
+# rg -l -g'!*_test.go' -g'!testdata' '^package main'|xargs dirname|sort -u
+export DH_GOLANG_EXCLUDES := \
+	cmd/cover \
+	cmd/getgo/server \
+	gopls/api-diff \
+	gopls/doc \
+	gopls/integration/govim \
+	gopls/internal/coverage \
+	gopls/release \
+	internal/lsp/helper \
+	internal/stack/gostacks
+
+# Excluded tests
+export DH_GOLANG_EXCLUDES += \
+	gopls/internal/regtest \
+	gopls/test
+
+# needed for tests.
+export DH_GOLANG_INSTALL_EXTRA := godoc/static gopls/go.sum
+
+# eg #753978
+# stress #793693
+# bundle #818551
+RENAME_BIN := \
+	bundle \
+	eg \
+	guru \
+	stress
+
+# All go/analysis/*/*/cmd/*
+RENAME_BIN += \
+	fieldalignment \
+	findcall \
+	ifaceassert \
+	lostcancel \
+	nilness \
+	shadow \
+	stringintconv \
+	unmarshal
+
+# All cmd/auth/*
+RENAME_BIN += \
+	authtest \
+	cookieauth \
+	gitauth \
+	netrcauth
+
+execute_after_dh_auto_install:
+	for i in $(RENAME_BIN); \
+	do \
+	    mv debian/tmp/usr/bin/$$i debian/tmp/usr/bin/golang-$$i; \
+	done
+
+override_dh_auto_test:
+ifeq (,$(findstring gccgo, $(shell go version)))
+	# use short tests where possible (especially to skip tests like
+	# TestWebIndex which are very slow)
+	dh_auto_test -- -short -timeout=30m
+endif
+
+%:
+	dh $@ --buildsystem=golang --with=golang

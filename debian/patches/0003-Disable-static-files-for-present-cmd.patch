@@ -1,0 +1,62 @@
+From: Michael Stapelberg <stapelberg@debian.org>
+Date: Tue, 17 Nov 2020 02:14:58 +0800
+Subject: Disable static files for present cmd
+
+This path is debian-specific, hence this patch cannot go upstream.
+
+Forwarded: not-needed
+---
+ cmd/present/main.go | 9 +--------
+ cmd/present/play.go | 5 -----
+ 2 files changed, 1 insertion(+), 13 deletions(-)
+
+diff --git a/cmd/present/main.go b/cmd/present/main.go
+index b89e11f..a048a8a 100644
+--- a/cmd/present/main.go
++++ b/cmd/present/main.go
+@@ -7,7 +7,6 @@ package main
+ import (
+ 	"flag"
+ 	"fmt"
+-	"go/build"
+ 	"log"
+ 	"net"
+ 	"net/http"
+@@ -51,13 +50,7 @@ func main() {
+ 	}
+ 
+ 	if *basePath == "" {
+-		p, err := build.Default.Import(basePkg, "", build.FindOnly)
+-		if err != nil {
+-			fmt.Fprintf(os.Stderr, "Couldn't find gopresent files: %v\n", err)
+-			fmt.Fprintf(os.Stderr, basePathMessage, basePkg)
+-			os.Exit(1)
+-		}
+-		*basePath = p.Dir
++		*basePath = "/usr/share/golang-golang-x-tools/present"
+ 	}
+ 	err := initTemplates(*basePath)
+ 	if err != nil {
+diff --git a/cmd/present/play.go b/cmd/present/play.go
+index 2e53f14..62813c0 100644
+--- a/cmd/present/play.go
++++ b/cmd/present/play.go
+@@ -14,7 +14,6 @@ import (
+ 	"runtime"
+ 	"time"
+ 
+-	"golang.org/x/tools/godoc/static"
+ 	"golang.org/x/tools/playground/socket"
+ 	"golang.org/x/tools/present"
+ 
+@@ -35,10 +34,6 @@ func playScript(root, transport string) {
+ 	modTime := time.Now()
+ 	var buf bytes.Buffer
+ 	for _, p := range scripts {
+-		if s, ok := static.Files[p]; ok {
+-			buf.WriteString(s)
+-			continue
+-		}
+ 		b, err := ioutil.ReadFile(filepath.Join(root, "static", p))
+ 		if err != nil {
+ 			panic(err)

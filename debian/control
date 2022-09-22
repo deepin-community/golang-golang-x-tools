@@ -1,0 +1,85 @@
+Source: golang-golang-x-tools
+Maintainer: Debian Go Packaging Team <team+pkg-go@tracker.debian.org>
+Uploaders: Martín Ferrari <tincho@debian.org>,
+           Michael Stapelberg <stapelberg@debian.org>,
+           Tianon Gravi <tianon@debian.org>,
+           Tim Potter <tpot@hpe.com>,
+           Anthony Fok <foka@debian.org>,
+Section: golang
+Testsuite: autopkgtest-pkg-go
+Priority: optional
+Build-Depends: debhelper-compat (= 13),
+               dh-golang (>= 1.40~),
+               golang-any (>= 2:1.12~),
+               golang-github-sergi-go-diff-dev,
+               golang-github-yuin-goldmark-dev (>= 1.1.27),
+               golang-golang-x-mod-dev (>= 0.2.0),
+               golang-golang-x-net-dev (>= 1:0.0+git20200226.0de0cce),
+               golang-golang-x-sync-dev (>= 0.0~git20190911.cd5d95a),
+               golang-golang-x-sys-dev (>= 0.0~git20210124.22da62e),
+               golang-golang-x-xerrors-dev (>= 0.0~git20191204.9bdfabe),
+               golang-honnef-go-tools-dev (>= 2021.1.1~),
+               golang-mvdan-gofumpt-dev,
+               golang-mvdan-xurls-dev,
+Standards-Version: 4.6.0
+Vcs-Browser: https://salsa.debian.org/go-team/packages/golang-golang-x-tools
+Vcs-Git: https://salsa.debian.org/go-team/packages/golang-golang-x-tools.git
+Homepage: https://golang.org/x/tools
+Rules-Requires-Root: no
+XS-Go-Import-Path: golang.org/x/tools
+
+Package: golang-golang-x-tools
+Architecture: any
+Depends: libjs-jquery,
+         libjs-jquery-ui,
+         ${misc:Depends},
+         ${shlibs:Depends},
+Recommends: golang-doc,
+Built-Using: ${misc:Built-Using},
+Description: supplementary Go tools
+ This subrepository holds the source for various packages and tools that
+ support the Go programming language.
+ .
+ Some of the tools, godoc and vet for example, used to be included in the
+ golang-go package. Others, including the Go oracle and the test coverage tool,
+ can be fetched with "go get".
+ .
+ Packages include a type-checker for Go and an implementation of the Static
+ Single Assignment form (SSA) representation for Go programs.
+
+Package: golang-golang-x-tools-dev
+Architecture: all
+Depends: golang-github-yuin-goldmark-dev (>= 1.1.27),
+         golang-golang-x-mod-dev (>= 0.2.0),
+         golang-golang-x-net-dev (>= 1:0.0+git20200226.0de0cce),
+         golang-golang-x-sync-dev (>= 0.0~git20190911.cd5d95a),
+         golang-golang-x-sys-dev (>= 0.0~git20210124.22da62e),
+         golang-golang-x-xerrors-dev (>= 0.0~git20191204.9bdfabe),
+         ${misc:Depends},
+         ${shlibs:Depends},
+Description: supplementary Go tools (development files)
+ This subrepository holds the source for various packages and tools that
+ support the Go programming language.
+ .
+ Some of the tools, godoc and vet for example, used to be included in the
+ golang-go package. Others, including the Go oracle and the test coverage tool,
+ can be fetched with "go get".
+ .
+ Packages include a type-checker for Go and an implementation of the Static
+ Single Assignment form (SSA) representation for Go programs.
+ .
+ This package contains the development files.
+
+Package: gopls
+Architecture: any
+Depends: ${misc:Depends},
+         ${shlibs:Depends},
+Built-Using: ${misc:Built-Using},
+Breaks: golang-golang-x-tools (<< 1:0.0~git20201116.6f6c72a+ds-3),
+Replaces: golang-golang-x-tools (<< 1:0.0~git20201116.6f6c72a+ds-3),
+Description: language server for the Go language
+ gopls (pronounced: "go please") is the official language server for the Go
+ language.
+ .
+ The Language Server Protocol allows any text editor to be extended with
+ IDE-like features.

@@ -1,0 +1,42 @@
+cmd/present/static /usr/share/golang-golang-x-tools/present/
+cmd/present/templates /usr/share/golang-golang-x-tools/present/
+godoc/static /usr/share/golang-golang-x-tools/godoc/
+usr/bin/benchcmp
+usr/bin/callgraph
+usr/bin/compilebench
+usr/bin/digraph
+usr/bin/file2fuzz
+usr/bin/fiximports
+usr/bin/getgo
+usr/bin/go-contrib-init
+usr/bin/godex
+usr/bin/godoc
+usr/bin/goimports
+usr/bin/golang-authtest
+usr/bin/golang-bundle
+usr/bin/golang-cookieauth
+usr/bin/golang-eg
+usr/bin/golang-fieldalignment
+usr/bin/golang-findcall
+usr/bin/golang-gitauth
+usr/bin/golang-guru
+usr/bin/golang-ifaceassert
+usr/bin/golang-lostcancel
+usr/bin/golang-netrcauth
+usr/bin/golang-nilness
+usr/bin/golang-shadow
+usr/bin/golang-stress
+usr/bin/golang-stringintconv
+usr/bin/golang-unmarshal
+usr/bin/gomvpkg
+usr/bin/gopackages
+usr/bin/gorename
+usr/bin/gotype
+usr/bin/goyacc
+usr/bin/html2article
+usr/bin/present
+usr/bin/present2md
+usr/bin/splitdwarf
+usr/bin/ssadump
+usr/bin/stringer
+usr/bin/toolstash

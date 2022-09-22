@@ -1,0 +1,85 @@
+.\"                                      Hey, EMACS: -*- nroff -*-
+.de Vb \" Begin verbatim text
+.ft CW
+.nf
+.ne \\$1
+..
+.de Ve \" End verbatim text
+.ft R
+.fi
+..
+.TH SSADUMP 1 "2013-12-02"
+.\" Please adjust this date whenever revising the manpage.
+.SH NAME
+ssadump \- a tool for displaying and interpreting the SSA form of Go programs
+.SH SYNOPSIS
+.B ssadump
+.RI [ flags ]
+.IR "args ..."
+.SH DESCRIPTION
+
+SSA builder and interpreter.
+
+When -run is specified, ssadump will find the first package that
+defines a main function and run it in the interpreter.
+If none is found, the tests of each package will be run instead.
+
+.SH OPTIONS
+
+.TP
+.B \-build
+Options controlling the SSA builder.
+The value is a sequence of zero or more of these letters:
+
+.Vb 6
+\&C	perform sanity [C]hecking of the SSA form.
+\&D	include [D]ebug info for every function.
+\&P	log [P]ackage inventory.
+\&F	log [F]unction SSA code.
+\&S	log [S]ource locations as SSA builder progresses.
+\&G	use binary object files from gc to provide imports (no code).
+\&L	build distinct packages seria[L]ly instead of in parallel.
+\&N	build [N]aive SSA form: don't replace local loads/stores with registers.
+.Ve
+
+.TP
+.B \-cpuprofile
+write cpu profile to file
+
+.TP
+.B \-interp
+Options controlling the SSA test interpreter.
+The value is a sequence of zero or more more of these letters:
+.Vb 6
+\&R	disable [R]ecover() from panic; show interpreter crash instead.
+\&T	[T]race execution of the program.  Best for single-threaded programs!
+.Ve
+
+.TP
+.B \-run
+Invokes the SSA interpreter on the program.
+
+.SH EXAMPLES
+
+Quickly dump SSA form of a single package:
+
+.Vb 6
+\&      ssadump -build=FPG hello.go
+.Ve
+
+Interpret a program, with tracing:
+
+.Vb 6
+\&      ssadump -run -interp=T hello.go
+.Ve
+
+Interpret the unicode package's tests, verbosely:
+
+.Vb 6
+\&      ssadump -run unicode -- -test.v
+.Ve
+
+.SH AUTHOR
+.PP
+This manual page was written by Michael Stapelberg <stapelberg@debian.org>,
+for the Debian project (and may be used by others).

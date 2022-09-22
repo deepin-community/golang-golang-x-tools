@@ -1,0 +1,510 @@
+golang-golang-x-tools (1:0.1.7+ds-2) unstable; urgency=medium
+
+  * Team upload.
+  * Include ocagent package when build
+
+ -- Shengjing Zhu <zhsj@debian.org>  Sun, 10 Oct 2021 19:06:56 +0800
+
+golang-golang-x-tools (1:0.1.7+ds-1) unstable; urgency=medium
+
+  * Team upload
+  * New upstream release
+  * Install new binary file2fuzz
+
+ -- Shengjing Zhu <zhsj@debian.org>  Sun, 10 Oct 2021 00:41:50 +0800
+
+golang-golang-x-tools (1:0.1.5+ds-1) unstable; urgency=medium
+
+  * Team upload
+  * New upstream release
+  * Update Standards-Version to 4.6.0 (no changes)
+  * Refresh patches
+  * Bump golang-honnef-go-tools-dev to 2021.1.1
+
+ -- Shengjing Zhu <zhsj@debian.org>  Sun, 12 Sep 2021 16:45:30 +0800
+
+golang-golang-x-tools (1:0.1.0+ds-1) unstable; urgency=medium
+
+  * Team upload.
+  * New upstream release
+  * Add golang-golang-x-sys-dev to Depends
+  * Update Standards-Version to 4.5.1 (no changes)
+  * Drop genapijson binary.
+    It was in internal directory, now it has been removed
+  * Drop gostacks binary.
+    It's in internal directory
+  * Add new golang-fieldalignment binary
+
+ -- Shengjing Zhu <zhsj@debian.org>  Fri, 29 Jan 2021 17:55:13 +0800
+
+golang-golang-x-tools (1:0.0~git20201121.780cb80+ds-2) unstable; urgency=medium
+
+  * Team upload.
+  * Add Breaks+Replaces in gopls (Closes: #975544)
+
+ -- Shengjing Zhu <zhsj@debian.org>  Mon, 23 Nov 2020 22:52:34 +0800
+
+golang-golang-x-tools (1:0.0~git20201121.780cb80+ds-1) unstable; urgency=medium
+
+  * Team upload.
+  * New upstream snapshot
+  * Exclude slow gopls regtest
+
+ -- Shengjing Zhu <zhsj@debian.org>  Mon, 23 Nov 2020 13:13:17 +0800
+
+golang-golang-x-tools (1:0.0~git20201116.6f6c72a+ds-3) experimental; urgency=medium
+
+  * Team upload.
+  * Enable building gopls and split it to a standalone package.
+    gopls is the official language server for the Go language.
+    Closes: #974931
+
+ -- Shengjing Zhu <zhsj@debian.org>  Tue, 17 Nov 2020 23:05:54 +0800
+
+golang-golang-x-tools (1:0.0~git20201116.6f6c72a+ds-2) unstable; urgency=medium
+
+  * Team upload.
+  * Upload to unstable
+  * Remove GPL-3 in d/copyright
+    jquery.treeview is licensed in Expat only now
+  * Change section to golang
+
+ -- Shengjing Zhu <zhsj@debian.org>  Tue, 17 Nov 2020 12:29:05 +0800
+
+golang-golang-x-tools (1:0.0~git20201116.6f6c72a+ds-1) experimental; urgency=medium
+
+  * Team upload.
+  * New upstream snapshot
+  * Add patch to skip tests which need Go mod
+
+ -- Shengjing Zhu <zhsj@debian.org>  Tue, 17 Nov 2020 02:34:43 +0800
+
+golang-golang-x-tools (1:0.0~git20200410.79a7a31+ds-3) unstable; urgency=medium
+
+  * Team upload.
+  * Drop 0010-Workaround_missing_api_symlink.patch, fixed in golang 1.12
+  * Disable tests on gccgo
+  * Increase test timeout
+  * Update debhelper-compat to 13
+  * Update lintian overrides for golang-golang-x-tools-dev
+
+ -- Shengjing Zhu <zhsj@debian.org>  Tue, 21 Jul 2020 00:15:03 +0800
+
+golang-golang-x-tools (1:0.0~git20200410.79a7a31+ds-2) unstable; urgency=medium
+
+  * Team upload.
+  * Don't exclude internal/lsp package. (Closes: #963166)
+    It's used by other packages, and don't introduce extra dependencies.
+    Fix the failing autopkgtest.
+
+ -- Shengjing Zhu <zhsj@debian.org>  Sat, 18 Apr 2020 01:19:41 +0800
+
+golang-golang-x-tools (1:0.0~git20200410.79a7a31+ds-1) unstable; urgency=medium
+
+  * New upstream version 0.0~git20200410.79a7a31+ds
+    which builds successfully with golang-1.14 (Closes: #953734)
+  * Add "Rules-Requires-Root: no" to debian/control
+  * Revert "Include our own vendored copy of golang.org/x/mod"
+    as golang-golang-x-mod entered Debian on 2020-03-07
+  * Update dependencies according to go.mod.
+    Notably, there is a new dependency on golang-github-yuin-goldmark-dev
+  * Remove obsolete man pages builder.1 and tipgodoc.1
+  * Add to DH_GOLANG_EXCLUDES "internal/lsp"
+    which is a part of the previously excluded "gopls"
+  * Rename or delete executables with too generic names (Closes: #953725)
+
+ -- Anthony Fok <foka@debian.org>  Sat, 11 Apr 2020 08:51:49 -0600
+
+golang-golang-x-tools (1:0.0~git20200213.88e652f+ds-1) unstable; urgency=medium
+
+  * New upstream version 0.0~git20200213.88e652f
+  * Bump Standards-Version to 4.5.0 (no change)
+  * Remove now obsolete 0011-Disable_Google_Analytics.patch
+  * Refresh 0005-Disable_static.go.patch and
+    0006-Do_not_depend_on_golang-doc.patch
+  * debian/copyright: Change Upstream-Name from tools to x/tools
+    and add Upstream-Contact: https://github.com/golang/go/issues
+  * Update dependencies according to go.mod.
+    Notably, there is a new dependency on golang-golang-x-mod-dev
+  * Include our own vendored copy of golang.org/x/mod
+    until golang-golang-x-mod enters Debian unstable
+
+ -- Anthony Fok <foka@debian.org>  Wed, 26 Feb 2020 09:53:58 -0700
+
+golang-golang-x-tools (1:0.0~git20191118.07fc4c7+ds-1) unstable; urgency=medium
+
+  * New upstream version 0.0~git20191118.07fc4c7
+  * Drop transitional packages golang-go.tools and golang-go.tools-dev
+    (Closes: #939231, 939232)
+  * Bump Standards-Version to 4.4.1 (no change)
+  * Drop 0014-go-packages-update-tests-to-reflect-changes-in-golan.patch
+    (upstream patch to fix packages_testo.go) which is included upstream
+    since 2019-10-05 or thereabouts
+  * Refresh debian/patches:
+    - 0005-Disable_static.go.patch
+    - 0006-Do_not_depend_on_golang-doc.patch
+    - 0007-Disable_tests_for_gccgo.patch
+    - 0015-skip-tests-that-run-go-build.patch
+  * Update Vcs-Browser and Vcs-Git, and move git repository
+    from https://salsa.debian.org/go-team/packages/golang-go.tools
+    to https://salsa.debian.org/go-team/packages/golang-golang-x-tools
+  * Adjust DH_GOLANG_EXCLUDES to exclude gopls, which gopls has been
+    separated out as its own module with different versioning from
+    golang.org/x/tools.  If there were ever a need to have gopls packaged
+    for Debian, it should probably done from a separate source package.
+  * Revert "debian/rules: Skip dh_dwz" now that #933541 has been fixed
+  * Update Build-Depends on dh-golang to (>= 1.40~) which allows us
+    not to manually set GOCACHE in debian/rules.
+
+ -- Anthony Fok <foka@debian.org>  Wed, 20 Nov 2019 22:54:30 -0700
+
+golang-golang-x-tools (1:0.0~git20190809.6d4652c+ds-4) unstable; urgency=medium
+
+  * Team upload.
+  * Add upstream patch to fix packages_test.go.
+  * Add Debian patch to fix endtoend_test.go.
+
+ -- Arnaud Rebillout <arnaud.rebillout@collabora.com>  Tue, 05 Nov 2019 16:12:21 +0700
+
+golang-golang-x-tools (1:0.0~git20190809.6d4652c+ds-3) unstable; urgency=medium
+
+  * Team upload.
+  * Skip another RAM hungry test in -short mode.
+
+ -- Michael Hudson-Doyle <mwhudson@debian.org>  Wed, 04 Sep 2019 09:13:12 +1200
+
+golang-golang-x-tools (1:0.0~git20190809.6d4652c+ds-2) unstable; urgency=medium
+
+  * Team upload.
+  * d/patches/0013-skip-TestBExportData_stdlib.patch: skip test that OOMs in autopkgtest.
+
+ -- Michael Hudson-Doyle <mwhudson@debian.org>  Mon, 02 Sep 2019 09:12:18 +1200
+
+golang-golang-x-tools (1:0.0~git20190809.6d4652c+ds-1) unstable; urgency=medium
+
+  * New upstream version 0.0~git20190809.6d4652c
+  * Remove third_party from Files-Excluded in debian/copyright
+    as it has been removed upstream in commit ae772f1 on 2019-03-21
+  * Add dependency on golang-golang-x-xerrors-dev as per upstream
+    commit be5259f on 2019-08-06
+
+ -- Anthony Fok <foka@debian.org>  Sat, 10 Aug 2019 20:34:51 -0600
+
+golang-golang-x-tools (1:0.0~git20190729.ff9f140+ds-1) unstable; urgency=medium
+
+  * New upstream version 0.0~git20190729.ff9f140
+  * Add "repacksuffix=+ds" to debian/watch
+  * Bump debhelper dependency to "Build-Depends: debhelper-compat (= 12)"
+  * Bump Standards-Version to 4.4.0 (no change)
+  * Add golang-golang-x-sync-dev to Build-Depends,
+    and bump golang-any (>= 2:1.11~)
+  * Refresh patches, especially:
+    - Disable new TestURL test in 0006-Do_not_depend_on_golang-doc.patch
+    - Remove 0009_Skip_broken_TestGuru_for_old_Go_versions_for_now.patch
+  * debian/rules: Skip dh_dwz.  See #933541 for more information.
+  * Remove debian/patches/0004-heapview.patch:
+    cmd/heapview was deleted by upstream author in commit 3c4dfba.
+  * Update godoc.1 to reflect the removal of CLI support in Go 1.12.
+    Users who want CLI support can use "go doc".
+
+ -- Anthony Fok <foka@debian.org>  Wed, 31 Jul 2019 07:22:06 -0600
+
+golang-golang-x-tools (1:0.0~git20190125.d66bd3c+ds-4) unstable; urgency=high
+
+  * Do not build cmd/gopls/forward,as it does not seem to be used, and
+    conflicts with binaries in other packages. Closes: #920934.
+
+ -- Martín Ferrari <tincho@debian.org>  Wed, 30 Jan 2019 20:18:31 +0000
+
+golang-golang-x-tools (1:0.0~git20190125.d66bd3c+ds-3) unstable; urgency=high
+
+  * debian/control: Remove Build-Dep on golang-doc, as it is not really
+    needed and prevents building in non-golang-go arches.
+
+ -- Martín Ferrari <tincho@debian.org>  Mon, 28 Jan 2019 23:58:22 +0000
+
+golang-golang-x-tools (1:0.0~git20190125.d66bd3c+ds-2) unstable; urgency=high
+
+  * Fix build failures on mips/mipsel due to alignment issues.
+
+ -- Martín Ferrari <tincho@debian.org>  Mon, 28 Jan 2019 20:57:26 +0000
+
+golang-golang-x-tools (1:0.0~git20190125.d66bd3c+ds-1) unstable; urgency=high
+
+  [ Anthony Fok ]
+  * Build-Depend on dh-golang (>= 1.31~) So that testdata/ directories are
+    copied automatically, avoiding build errors.
+  * Build-Depend on golang-any (>= 2:1.8~) for doc.IsPredefined
+
+  [ Dr. Tobias Quathamer ]
+  * Update team name
+  * Update to Standards-Version 4.3.0
+  * Simplify gbp.conf
+  * Use HTTPS for Homepage
+  * Remove empty d/lintian-overrides
+  * Refresh patches
+  * Disable pristine-tar
+  * Set GOCACHE variable to on
+
+  [ Martín Ferrari ]
+  * New upstream snapshot. Closes: #918415 (raising urgency).
+  * debian/gbp.conf: Re-add debian-branch option, as some tools require
+    it.
+  * debian/control: Build-depend on golang-doc, as some tests require it.
+  * Fix GOCACHE value so it matches what tests expect.
+  * debian/rules: Honour DEB_BUILD_OPTIONS=nocheck.
+  * Fix more failing tests.
+  * Add watchfile.
+  * Update lintian overrides for test data.
+  * Disable loading Google Analytics in godoc pages.
+  * debian/control: Remove unneeded build dependencies.
+
+ -- Martín Ferrari <tincho@debian.org>  Mon, 28 Jan 2019 14:13:45 +0000
+
+golang-golang-x-tools (1:0.0~git20180501.d3e4ceb5+ds-1) unstable; urgency=medium
+
+  [ Alexandre Viau ]
+  * Point Vcs-* urls to salsa.debian.org.
+
+  [ Anthony Fok ]
+  * New upstream version 0.0~git20180501.d3e4ceb5+ds
+    from release-branch.go1.10
+  * Apply "cme fix dpkg" fixes to debian/control,
+    bumping Standards-Version to 4.1.4, etc.
+  * Use debhelper (>= 11)
+  * Refresh patches
+  * Apply upstream patch to fix TestGuru error.
+    See "cmd/guru: skip broken test for old Go versions for now"
+    at https://go-review.googlesource.com/c/tools/+/112375
+
+ -- Anthony Fok <foka@debian.org>  Wed, 09 May 2018 17:23:50 -0600
+
+golang-golang-x-tools (1:0.0~git20180222.0.f8f2f88+ds-1) unstable; urgency=high
+
+  * New upstream snapshot. Closes: #890927.
+  * Refresh patches.
+  * Add new lintian overrides.
+  * Fix gccgo build by disabling a couple of tests.
+  * Stop manually copying testdata.
+
+ -- Martín Ferrari <tincho@debian.org>  Sat, 24 Feb 2018 12:07:14 +0000
+
+golang-golang-x-tools (1:0.0~git20170707.0.bce9606b+ds-1) unstable; urgency=medium
+
+  * New upstream snapshot.
+  * Delete 0010-fix-gorename-tests.patch because "x/tools/cmd/rename:
+    tests are failing for Go 1.7 and Go 1.8" has been fixed upstream.
+  * Remove GOROOT hack (needed by gccgo-6 but not gccgo-7).
+    gccgo-7 no longer installs godoc into $GOROOT/bin like gccgo-6 did,
+    and the old GOROOT hack would actually cause FTBFS with gccgo-7.
+    (Closes: #866710)
+  * Update and re-enable patches which disable or fix/workaround
+    issues with certain tests with gccgo-7.
+
+ -- Anthony Fok <foka@debian.org>  Fri, 07 Jul 2017 16:18:16 -0600
+
+golang-golang-x-tools (1:0.0~git20170629.0.1b3bb8de+ds-1) unstable; urgency=medium
+
+  * Repack to remove excluded files (command: "XZ_OPT=-9e mk-origtargz -S +ds").
+
+ -- Anthony Fok <foka@debian.org>  Fri, 30 Jun 2017 23:29:00 -0600
+
+golang-golang-x-tools (1:0.0~git20170629.0.1b3bb8de-1) unstable; urgency=medium
+
+  * New upstream snapshot.
+  * Bump Standards-Version to 4.0.0:
+    Use https form of the copyright-format URL in debian/copyright.
+  * Add myself to the list of Uploaders.
+  * Add Build-Depends on golang-golang-x-crypto-dev due to new dependency on
+    golang.org/x/crypto/acme/autocert in command-line tools.
+  * Update debian patches for new upstream snapshot:
+    - Refreshed to remove line offsets and/or fuzz:
+      * 0002-skip-online-tests.patch
+      * 0005-Disable_static.go.patch (with minor code adjustment)
+      * 0006-Do_not_depend_on_golang-doc.patch
+    - Disabled for now:
+      * 0004-heapview.patch (does not apply cleanly, and heapview is not built)
+      * 0007-Disable_tests_for_gccgo.patch (gccgo-7 may do better than gccgo-6)
+      * 0008-Fix_tests_for_gccgo.patch (Ditto)
+    - Deleted previously cherry-picked upstream patch:
+      * 0009-imports-symlink-flake.patch
+    - Add upstream work-in-progress patch to fix failed gorename tests:
+      * 0010-fix-gorename-tests.patch
+  * Update Lintian overrides.
+
+ -- Anthony Fok <foka@debian.org>  Fri, 30 Jun 2017 10:43:15 -0600
+
+golang-golang-x-tools (1:0.0~git20161028.0.b814a3b+ds-4) unstable; urgency=medium
+
+  * disable tests on gccgo (closes: #857024)
+  * add 0009-imports-symlink-flake.patch (Closes: #857025)
+
+ -- Michael Stapelberg <stapelberg@debian.org>  Fri, 17 Mar 2017 19:43:57 +0100
+
+golang-golang-x-tools (1:0.0~git20161028.0.b814a3b+ds-3) unstable; urgency=high
+
+  * Reintroduce GOROOT hack to solve build failures with gccgo.
+  * Fix or disable tests that don't work when using gccgo. Possibly some tools
+    won't work with gccgo properly, this is being followed upstream in
+    https://github.com/golang/go/issues/17999
+
+ -- Martín Ferrari <tincho@debian.org>  Mon, 21 Nov 2016 19:44:05 +0000
+
+golang-golang-x-tools (1:0.0~git20161028.0.b814a3b+ds-2) unstable; urgency=medium
+
+  * Drop unneeded build-dependency on golang-doc. Add recommends on that.
+  * Adjust tests to cope with no golang-doc.
+  * Add copyright info about cmd/goyacc/yacc.go
+
+ -- Martín Ferrari <tincho@debian.org>  Mon, 31 Oct 2016 22:50:49 +0000
+
+golang-golang-x-tools (1:0.0~git20161028.0.b814a3b+ds-1) unstable; urgency=high
+
+  [ Tim Potter ]
+  * Remove dependency on js packages for golang-golang-x-tools-dev package
+  * Remove dependency on dev package for golang-golang-x-tools package
+
+  [ Martín Ferrari ]
+  * New upstream release.
+  * Add myself to Uploaders.
+  * Remove build dependencies on jquery and appengine libraries, as these are
+    not needed.
+  * Update oracle man page to new golang-guru tool.
+  * Clean-up debian/rules, and stop building heapview until nodejs dependency
+    issues are solved.
+  * Drop nodejs dependencies, so it can be installable everywhere again.
+    Raising urgency.
+  * Use /usr/share/golang-golang-x-tools for static web files.
+  * Stop embedding web files, and separate them from code.
+  * Remove useless watchfile.
+  * Adjust lintian overrides.
+  * debian/control: Fix Vcs-* fields.
+  * debian/control: Replace golang-go with golang-any in Build-Depends.
+
+ -- Martín Ferrari <tincho@debian.org>  Mon, 31 Oct 2016 21:36:08 +0000
+
+golang-golang-x-tools (1:0.0~git20160826.0.a832035-1) unstable; urgency=medium
+
+  * Team upload.
+
+  [ Paul Tagliamonte ]
+  * Use a secure transport for the Vcs-Git and Vcs-Browser URL
+
+  [ Martín Ferrari ]
+  * New upstream snapshot. (Closes: #835760)
+  * debian/control: Update Standards-Version (no changes), and version
+    dependency on dh-golang.
+  * Remove now unneeded GOROOT hack, and simplify rules
+  * Add lintian overrides for -dev package.
+
+  [ Tim Potter ]
+  * Use external packages for third party javascript used in heapview.
+
+ -- Tim Potter <tpot@hpe.com>  Sun, 16 Oct 2016 12:17:45 +1100
+
+golang-golang-x-tools (1:0.0~git20160315.0.f42ec61-2) unstable; urgency=medium
+
+  * Rename bundle to golang-bundle. (Closes: #818551)
+
+ -- Michael Hudson-Doyle <michael.hudson@canonical.com>  Thu, 17 Mar 2016 18:37:54 -0700
+
+golang-golang-x-tools (1:0.0~git20160315.0.f42ec61-1) unstable; urgency=medium
+
+  * New upstream snapshot. (Closes: #818320)
+    - Passes tests with Go 1.6.
+
+ -- Michael Hudson-Doyle <michael.hudson@canonical.com>  Wed, 16 Mar 2016 14:18:54 -0700
+
+golang-golang-x-tools (1:0.0~git20151026.0.0f9d71c-2) unstable; urgency=medium
+
+  * Exclude "cover" and "vet" from being built/installed (Closes: #803130)
+
+ -- Tianon Gravi <tianon@debian.org>  Tue, 27 Oct 2015 14:36:17 -0700
+
+golang-golang-x-tools (1:0.0~git20151026.0.0f9d71c-1) unstable; urgency=medium
+
+  * Update to newer upstream snapshot (Closes: #802988)
+    - Compiles properly with Go 1.5+
+    - No longer installs everything to GOROOT
+
+ -- Tianon Gravi <tianon@debian.org>  Mon, 26 Oct 2015 15:46:30 -0700
+
+golang-golang-x-tools (1:0.0~git20150716.0.87156cb+dfsg1-4) unstable; urgency=medium
+
+  * Make the transitional golang-go.tools-dev Architecture: all, not
+    Architecture: any (otherwise both 1:0.0~git20150716.0.87156cb+dfsg1-3 and
+    0.0~hg20140703-4 are in Debian testing). (Closes: #799797)
+
+ -- Michael Stapelberg <stapelberg@debian.org>  Thu, 01 Oct 2015 20:55:09 +0200
+
+golang-golang-x-tools (1:0.0~git20150716.0.87156cb+dfsg1-3) unstable; urgency=medium
+
+  * Rename stress to golang-stress (Closes: #793693)
+
+ -- Michael Stapelberg <stapelberg@debian.org>  Mon, 27 Jul 2015 19:16:39 +0200
+
+golang-golang-x-tools (1:0.0~git20150716.0.87156cb+dfsg1-2) unstable; urgency=medium
+
+  * Fix upgrade path by using correct version number (forgot the epoch
+    earlier) in Breaks/Replaces fields (Closes: #793650)
+  * Depend on dh-golang >= 1.7 instead of manually running go generate
+
+ -- Michael Stapelberg <stapelberg@debian.org>  Sun, 26 Jul 2015 13:59:29 +0200
+
+golang-golang-x-tools (1:0.0~git20150716.0.87156cb+dfsg1-1) unstable; urgency=medium
+
+  * Rename source and binary package from golang-go.tools{,-dev} to
+    golang-golang-x-tools{,-dev}, following the policy outlined at
+    http://pkg-go.alioth.debian.org/packaging.html
+  * New upstream version
+  * Repackage upstream source to use symlinks to jquery and jquery-ui instead
+    of bundled source copies.
+  * drop debian/patches/0003-fix-tests.patch (merged upstream)
+  * add debian/patches/0003-present-base-path.patch
+  * update standards-version to 3.9.6 (no changes necessary)
+
+ -- Michael Stapelberg <stapelberg@debian.org>  Tue, 21 Jul 2015 10:36:10 +0200
+
+golang-go.tools (0.0~hg20140703-4) unstable; urgency=medium
+
+  * Update debian/patches/0003-fix-tests.patch
+
+ -- Michael Stapelberg <stapelberg@debian.org>  Fri, 12 Sep 2014 09:11:12 +0200
+
+golang-go.tools (0.0~hg20140703-3) unstable; urgency=medium
+
+  * Add debian/patches/0003-fix-tests.patch (Closes: #754644)
+
+ -- Michael Stapelberg <stapelberg@debian.org>  Fri, 29 Aug 2014 09:50:11 +0200
+
+golang-go.tools (0.0~hg20140703-2) unstable; urgency=medium
+
+  * Rename eg to golang-go (Closes: #753978)
+
+ -- Michael Stapelberg <stapelberg@debian.org>  Tue, 22 Jul 2014 09:48:00 +0200
+
+golang-go.tools (0.0~hg20140703-1) unstable; urgency=medium
+
+  * Import new upstream version (release-branch.go1.3). The old version broke
+    with go 1.3 (Closes: #753185)
+
+ -- Michael Stapelberg <stapelberg@debian.org>  Thu, 03 Jul 2014 18:52:34 +0200
+
+golang-go.tools (0.0~hg20131126-3) unstable; urgency=low
+
+  * Add patch 0002-skip-online-tests.patch (Thanks James Page)
+    (Closes: #737985)
+
+ -- Michael Stapelberg <stapelberg@debian.org>  Fri, 07 Feb 2014 21:27:37 +0100
+
+golang-go.tools (0.0~hg20131126-2) unstable; urgency=low
+
+  * Fix Breaks/Replaces field (Closes: #731498)
+
+ -- Michael Stapelberg <stapelberg@debian.org>  Fri, 06 Dec 2013 08:24:44 +0100
+
+golang-go.tools (0.0~hg20131126-1) unstable; urgency=low
+
+  * Initial upload (Closes: #731046)
+
+ -- Michael Stapelberg <stapelberg@debian.org>  Mon, 02 Dec 2013 22:17:08 +0100

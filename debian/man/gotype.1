@@ -1,0 +1,89 @@
+.\"                                      Hey, EMACS: -*- nroff -*-
+.de Vb \" Begin verbatim text
+.ft CW
+.nf
+.ne \\$1
+..
+.de Ve \" End verbatim text
+.ft R
+.fi
+..
+.TH GOTYPE 1 "2013-12-02"
+.\" Please adjust this date whenever revising the manpage.
+.SH NAME
+gotype \- syntatic and semantic analysis of Go files
+.SH SYNOPSIS
+.B gotype
+.RI [ flags ]
+.RI [
+.IR "path ..."
+.RI ]
+.SH DESCRIPTION
+The gotype command does syntactic and semantic analysis of Go files
+and packages like the front-end of a Go compiler. Errors are reported
+if the analysis fails; otherwise gotype is quiet (unless -v is set).
+
+Without a list of paths, gotype reads from standard input, which
+must provide a single Go source file defining a complete package.
+
+If a single path is specified that is a directory, gotype checks
+the Go files in that directory; they must all belong to the same
+package.
+
+Otherwise, each path must be the filename of Go file belonging to
+the same package.
+
+.SH OPTIONS
+
+.TP
+.B \-a
+use all (incl. _test.go) files when processing a directory
+.TP
+.B \-ast
+print AST (forces -seq)
+.TP
+.B \-comments
+parse comments (ignored unless -ast or -trace is provided)
+.TP
+.B \-e
+report all errors (not just the first 10)
+.TP
+.B \-seq
+parse sequentially, rather than in parallel
+.TP
+.B \-trace
+print parse trace (forces -seq)
+.TP
+.B \-v
+verbose mode
+
+.SH EXAMPLES
+
+To check the files a.go, b.go, and c.go:
+
+.Vb 6
+\&      gotype a.go b.go c.go
+.Ve
+
+To check an entire package in the directory dir and print the processed files:
+
+.Vb 6
+\&      gotype -v dir
+.Ve
+
+To check an entire package including tests in the local directory:
+
+.Vb 6
+\&      gotype -a .
+.Ve
+
+To verify the output of a pipe:
+
+.Vb 6
+\&      echo "package foo" | gotype
+.Ve
+
+.SH AUTHOR
+.PP
+This manual page was written by Michael Stapelberg <stapelberg@debian.org>,
+for the Debian project (and may be used by others).

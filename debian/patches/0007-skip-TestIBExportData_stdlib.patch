@@ -1,0 +1,37 @@
+From: Debian Go Packaging Team <team+pkg-go@tracker.debian.org>
+Date: Tue, 17 Nov 2020 02:14:58 +0800
+Subject: skip-TestIBExportData_stdlib
+
+---
+ go/internal/gcimporter/bexport_test.go | 3 +++
+ go/internal/gcimporter/iexport_test.go | 3 +++
+ 2 files changed, 6 insertions(+)
+
+diff --git a/go/internal/gcimporter/bexport_test.go b/go/internal/gcimporter/bexport_test.go
+index 702278e..9256f5c 100644
+--- a/go/internal/gcimporter/bexport_test.go
++++ b/go/internal/gcimporter/bexport_test.go
+@@ -35,6 +35,9 @@ func TestBExportData_stdlib(t *testing.T) {
+ 	if isRace {
+ 		t.Skipf("stdlib tests take too long in race mode and flake on builders")
+ 	}
++	if testing.Short() {
++		t.Skip("skipping RAM hungry test in -short mode")
++	}
+ 
+ 	// Load, parse and type-check the program.
+ 	ctxt := build.Default // copy
+diff --git a/go/internal/gcimporter/iexport_test.go b/go/internal/gcimporter/iexport_test.go
+index 5385011..1283336 100644
+--- a/go/internal/gcimporter/iexport_test.go
++++ b/go/internal/gcimporter/iexport_test.go
+@@ -72,6 +72,9 @@ func TestIExportData_stdlib(t *testing.T) {
+ 	if isRace {
+ 		t.Skipf("stdlib tests take too long in race mode and flake on builders")
+ 	}
++	if testing.Short() {
++		t.Skip("skipping RAM hungry test in -short mode")
++	}
+ 
+ 	// Load, parse and type-check the program.
+ 	ctxt := build.Default // copy
