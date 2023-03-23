@@ -7,10 +7,9 @@ package misc
 import (
 	"testing"
 
-	. "golang.org/x/tools/internal/lsp/regtest"
+	. "golang.org/x/tools/gopls/internal/lsp/regtest"
 
-	"golang.org/x/tools/internal/lsp/protocol"
-	"golang.org/x/tools/internal/testenv"
+	"golang.org/x/tools/gopls/internal/lsp/protocol"
 )
 
 const basicProxy = `
@@ -25,8 +24,6 @@ var Goodbye error
 `
 
 func TestInconsistentVendoring(t *testing.T) {
-	testenv.NeedsGo1Point(t, 14)
-
 	const pkgThatUsesVendoring = `
 -- go.mod --
 module mod.com
@@ -49,7 +46,7 @@ func _() {
 }
 `
 	WithOptions(
-		Modes(Singleton),
+		Modes(Default),
 		ProxyFiles(basicProxy),
 	).Run(t, pkgThatUsesVendoring, func(t *testing.T, env *Env) {
 		env.OpenFile("a/a1.go")

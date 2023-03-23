@@ -1,0 +1,23 @@
+From: Shengjing Zhu <zhsj@debian.org>
+Date: Tue, 7 Feb 2023 21:29:58 +0800
+Subject: Skip gopls/internal/lsp/cmd TestCapabilities
+
+Needs go mod
+
+Forwarded: not-needed
+---
+ gopls/internal/lsp/cmd/capabilities_test.go | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/gopls/internal/lsp/cmd/capabilities_test.go b/gopls/internal/lsp/cmd/capabilities_test.go
+index 4b38db7..43ab873 100644
+--- a/gopls/internal/lsp/cmd/capabilities_test.go
++++ b/gopls/internal/lsp/cmd/capabilities_test.go
+@@ -20,6 +20,7 @@ import (
+ // TestCapabilities does some minimal validation of the server's adherence to the LSP.
+ // The checks in the test are added as changes are made and errors noticed.
+ func TestCapabilities(t *testing.T) {
++	t.Skip("nneds Go mod")
+ 	tmpDir, err := ioutil.TempDir("", "fake")
+ 	if err != nil {
+ 		t.Fatal(err)

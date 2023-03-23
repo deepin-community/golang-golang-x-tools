@@ -1,0 +1,30 @@
+From: Arnaud Rebillout <arnaud.rebillout@collabora.com>
+Date: Tue, 17 Nov 2020 02:14:58 +0800
+Subject: Skip cmd/stringer e2e test
+
+Origin: vendor
+Forwarded: not-needed
+Last-Update: 2019-11-05
+
+Seems like 'go build' can't work offline:
+go: golang.org/x/net@<<...>>: module lookup disabled by GOPROXY=off
+Last-Update: 2023-02-07
+---
+ cmd/stringer/endtoend_test.go | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/cmd/stringer/endtoend_test.go b/cmd/stringer/endtoend_test.go
+index 268c2f6..5fb156b 100644
+--- a/cmd/stringer/endtoend_test.go
++++ b/cmd/stringer/endtoend_test.go
+@@ -4,8 +4,8 @@
+ 
+ // go command is not available on android
+ 
+-//go:build !android
+-// +build !android
++//go:build !android && ignore
++// +build !android,ignore
+ 
+ package main
+ 

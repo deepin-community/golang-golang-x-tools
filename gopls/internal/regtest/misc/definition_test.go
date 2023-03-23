@@ -5,15 +5,17 @@
 package misc
 
 import (
+	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"testing"
 
-	. "golang.org/x/tools/internal/lsp/regtest"
-	"golang.org/x/tools/internal/testenv"
+	"golang.org/x/tools/gopls/internal/lsp/protocol"
+	. "golang.org/x/tools/gopls/internal/lsp/regtest"
+	"golang.org/x/tools/gopls/internal/lsp/tests/compare"
 
-	"golang.org/x/tools/internal/lsp/fake"
-	"golang.org/x/tools/internal/lsp/tests"
+	"golang.org/x/tools/gopls/internal/lsp/fake"
 )
 
 const internalDefinition = `
@@ -86,7 +88,6 @@ func TestUnexportedStdlib_Issue40809(t *testing.T) {
 	Run(t, stdlibDefinition, func(t *testing.T, env *Env) {
 		env.OpenFile("main.go")
 		name, _ := env.GoToDefinition("main.go", env.RegexpSearch("main.go", `fmt.(Printf)`))
-		env.OpenFile(name)
 
 		pos := env.RegexpSearch(name, `:=\s*(newPrinter)\(\)`)
 
@@ -132,7 +133,7 @@ func main() {
 		}
 		want := "```go\nfunc (error).Error() string\n```"
 		if content.Value != want {
-			t.Fatalf("hover failed:\n%s", tests.Diff(t, want, content.Value))
+			t.Fatalf("hover failed:\n%s", compare.Text(want, content.Value))
 		}
 	})
 }
@@ -161,9 +162,7 @@ func main() {}
 	} {
 		t.Run(tt.importShortcut, func(t *testing.T) {
 			WithOptions(
-				EditorConfig{
-					ImportShortcut: tt.importShortcut,
-				},
+				Settings{"importShortcut": tt.importShortcut},
 			).Run(t, mod, func(t *testing.T, env *Env) {
 				env.OpenFile("main.go")
 				file, pos := env.GoToDefinition("main.go", env.RegexpSearch("main.go", `"fmt"`))
@@ -238,8 +237,6 @@ func main() {}
 
 // Test for golang/go#47825.
 func TestImportTestVariant(t *testing.T) {
-	testenv.NeedsGo1Point(t, 13)
-
 	const mod = `
 -- go.mod --
 module mod.com
@@ -275,5 +272,101 @@ package client
 	Run(t, mod, func(t *testing.T, env *Env) {
 		env.OpenFile("client/client_role_test.go")
 		env.GoToDefinition("client/client_role_test.go", env.RegexpSearch("client/client_role_test.go", "RoleSetup"))
+	})
+}
+
+// This test exercises a crashing pattern from golang/go#49223.
+func TestGoToCrashingDefinition_Issue49223(t *testing.T) {
+	Run(t, "", func(t *testing.T, env *Env) {
+		params := &protocol.DefinitionParams{}
+		params.TextDocument.URI = protocol.DocumentURI("fugitive%3A///Users/user/src/mm/ems/.git//0/pkg/domain/treasury/provider.go")
+		params.Position.Character = 18
+		params.Position.Line = 0
+		env.Editor.Server.Definition(env.Ctx, params)
+	})
+}
+
+// TestVendoringInvalidatesMetadata ensures that gopls uses the
+// correct metadata even after an external 'go mod vendor' command
+// causes packages to move; see issue #55995.
+// See also TestImplementationsInVendor, which tests the same fix.
+func TestVendoringInvalidatesMetadata(t *testing.T) {
+	const proxy = `
+-- other.com/b@v1.0.0/go.mod --
+module other.com/b
+go 1.14
+
+-- other.com/b@v1.0.0/b.go --
+package b
+const K = 0
+`
+	const src = `
+-- go.mod --
+module example.com/a
+go 1.14
+require other.com/b v1.0.0
+
+-- go.sum --
+other.com/b v1.0.0 h1:1wb3PMGdet5ojzrKl+0iNksRLnOM9Jw+7amBNqmYwqk=
+other.com/b v1.0.0/go.mod h1:TgHQFucl04oGT+vrUm/liAzukYHNxCwKNkQZEyn3m9g=
+
+-- a.go --
+package a
+import "other.com/b"
+const _ = b.K
+
+`
+	WithOptions(
+		ProxyFiles(proxy),
+		Modes(Default), // fails in 'experimental' mode
+	).Run(t, src, func(t *testing.T, env *Env) {
+		// Enable to debug go.sum mismatch, which may appear as
+		// "module lookup disabled by GOPROXY=off", confusingly.
+		if false {
+			env.DumpGoSum(".")
+		}
+
+		env.OpenFile("a.go")
+		refPos := env.RegexpSearch("a.go", "K") // find "b.K" reference
+
+		// Initially, b.K is defined in the module cache.
+		gotFile, _ := env.GoToDefinition("a.go", refPos)
+		wantCache := filepath.ToSlash(env.Sandbox.GOPATH()) + "/pkg/mod/other.com/b@v1.0.0/b.go"
+		if gotFile != wantCache {
+			t.Errorf("GoToDefinition, before: got file %q, want %q", gotFile, wantCache)
+		}
+
+		// Run 'go mod vendor' outside the editor.
+		if err := env.Sandbox.RunGoCommand(env.Ctx, ".", "mod", []string{"vendor"}, true); err != nil {
+			t.Fatalf("go mod vendor: %v", err)
+		}
+
+		// Synchronize changes to watched files.
+		env.Await(env.DoneWithChangeWatchedFiles())
+
+		// Now, b.K is defined in the vendor tree.
+		gotFile, _ = env.GoToDefinition("a.go", refPos)
+		wantVendor := "vendor/other.com/b/b.go"
+		if gotFile != wantVendor {
+			t.Errorf("GoToDefinition, after go mod vendor: got file %q, want %q", gotFile, wantVendor)
+		}
+
+		// Delete the vendor tree.
+		if err := os.RemoveAll(env.Sandbox.Workdir.AbsPath("vendor")); err != nil {
+			t.Fatal(err)
+		}
+		// Notify the server of the deletion.
+		if err := env.Sandbox.Workdir.CheckForFileChanges(env.Ctx); err != nil {
+			t.Fatal(err)
+		}
+
+		// Synchronize again.
+		env.Await(env.DoneWithChangeWatchedFiles())
+
+		// b.K is once again defined in the module cache.
+		gotFile, _ = env.GoToDefinition("a.go", refPos)
+		if gotFile != wantCache {
+			t.Errorf("GoToDefinition, after rm -rf vendor: got file %q, want %q", gotFile, wantCache)
+		}
 	})
 }

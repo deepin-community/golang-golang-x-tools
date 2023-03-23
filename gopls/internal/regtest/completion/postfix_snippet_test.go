@@ -8,8 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	. "golang.org/x/tools/internal/lsp/regtest"
-	"golang.org/x/tools/internal/lsp/source"
+	. "golang.org/x/tools/gopls/internal/lsp/regtest"
 )
 
 func TestPostfixSnippetCompletion(t *testing.T) {
@@ -266,6 +265,27 @@ for k := range foo {
 `,
 		},
 		{
+			name: "channel_range",
+			before: `
+package foo
+
+func _() {
+	foo := make(chan int)
+	foo.range
+}
+`,
+			after: `
+package foo
+
+func _() {
+	foo := make(chan int)
+	for e := range foo {
+	$0
+}
+}
+`,
+		},
+		{
 			name: "var",
 			before: `
 package foo
@@ -372,18 +392,60 @@ func _() {
 }
 `,
 		},
+		{
+			name: "string split",
+			before: `
+package foo
+
+func foo() []string {
+	x := "test"
+	return x.split
+}`,
+			after: `
+package foo
+
+import "strings"
+
+func foo() []string {
+	x := "test"
+	return strings.Split(x, "$0")
+}`,
+		},
+		{
+			name: "string slice join",
+			before: `
+package foo
+
+func foo() string {
+	x := []string{"a", "test"}
+	return x.join
+}`,
+			after: `
+package foo
+
+import "strings"
+
+func foo() string {
+	x := []string{"a", "test"}
+	return strings.Join(x, "$0")
+}`,
+		},
 	}
 
-	r := WithOptions(Options(func(o *source.Options) {
-		o.ExperimentalPostfixCompletions = true
-	}))
+	r := WithOptions(
+		Settings{
+			"experimentalPostfixCompletions": true,
+		},
+	)
 	r.Run(t, mod, func(t *testing.T, env *Env) {
+		env.CreateBuffer("foo.go", "")
+
 		for _, c := range cases {
 			t.Run(c.name, func(t *testing.T) {
 				c.before = strings.Trim(c.before, "\n")
 				c.after = strings.Trim(c.after, "\n")
 
-				env.CreateBuffer("foo.go", c.before)
+				env.SetBufferContent("foo.go", c.before)
 
 				pos := env.RegexpSearch("foo.go", "\n}")
 				completions := env.Completion("foo.go", pos)
@@ -393,7 +455,7 @@ func _() {
 
 				env.AcceptCompletion("foo.go", pos, completions.Items[0])
 
-				if buf := env.Editor.BufferText("foo.go"); buf != c.after {
+				if buf := env.BufferText("foo.go"); buf != c.after {
 					t.Errorf("\nGOT:\n%s\nEXPECTED:\n%s", buf, c.after)
 				}
 			})

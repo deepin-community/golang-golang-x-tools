@@ -11,9 +11,9 @@ import (
 	"strings"
 	"testing"
 
-	. "golang.org/x/tools/internal/lsp/regtest"
+	. "golang.org/x/tools/gopls/internal/lsp/regtest"
 
-	"golang.org/x/tools/internal/lsp/protocol"
+	"golang.org/x/tools/gopls/internal/lsp/protocol"
 	"golang.org/x/tools/internal/testenv"
 )
 
@@ -47,7 +47,7 @@ func TestZ(t *testing.T) {
 	Run(t, needs, func(t *testing.T, env *Env) {
 		env.CreateBuffer("a_test.go", ntest)
 		env.SaveBuffer("a_test.go")
-		got := env.Editor.BufferText("a_test.go")
+		got := env.BufferText("a_test.go")
 		if want != got {
 			t.Errorf("got\n%q, wanted\n%q", got, want)
 		}
@@ -76,7 +76,7 @@ func main() {
 		env.OrganizeImports("main.go")
 		actions := env.CodeAction("main.go", nil)
 		if len(actions) > 0 {
-			got := env.Editor.BufferText("main.go")
+			got := env.BufferText("main.go")
 			t.Errorf("unexpected actions %#v", actions)
 			if got == vim1 {
 				t.Errorf("no changes")
@@ -146,16 +146,13 @@ import "example.com/x"
 
 var _, _ = x.X, y.Y
 `
-	testenv.NeedsGo1Point(t, 15)
-
 	modcache, err := ioutil.TempDir("", "TestGOMODCACHE-modcache")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer os.RemoveAll(modcache)
-	editorConfig := EditorConfig{Env: map[string]string{"GOMODCACHE": modcache}}
 	WithOptions(
-		editorConfig,
+		EnvVars{"GOMODCACHE": modcache},
 		ProxyFiles(proxy),
 	).Run(t, files, func(t *testing.T, env *Env) {
 		env.OpenFile("main.go")
@@ -212,5 +209,51 @@ func TestA(t *testing.T) {
 		env.Await(
 			EmptyDiagnostics("a/a.go"),
 		)
+	})
+}
+
+// Test for golang/go#52784
+func TestGoWorkImports(t *testing.T) {
+	testenv.NeedsGo1Point(t, 18)
+	const pkg = `
+-- go.work --
+go 1.19
+
+use (
+        ./caller
+        ./mod
+)
+-- caller/go.mod --
+module caller.com
+
+go 1.18
+
+require mod.com v0.0.0
+
+replace mod.com => ../mod
+-- caller/caller.go --
+package main
+
+func main() {
+        a.Test()
+}
+-- mod/go.mod --
+module mod.com
+
+go 1.18
+-- mod/a/a.go --
+package a
+
+func Test() {
+}
+`
+	Run(t, pkg, func(t *testing.T, env *Env) {
+		env.OpenFile("caller/caller.go")
+		env.Await(env.DiagnosticAtRegexp("caller/caller.go", "a.Test"))
+
+		// Saving caller.go should trigger goimports, which should find a.Test in
+		// the mod.com module, thanks to the go.work file.
+		env.SaveBuffer("caller/caller.go")
+		env.Await(EmptyDiagnostics("caller/caller.go"))
 	})
 }

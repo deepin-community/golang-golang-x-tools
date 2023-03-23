@@ -84,6 +84,42 @@ Args:
 }
 ```
 
+### **Run go mod edit -go=version**
+Identifier: `gopls.edit_go_directive`
+
+Runs `go mod edit -go=version` for a module.
+
+Args:
+
+```
+{
+	// Any document URI within the relevant module.
+	"URI": string,
+	// The version to pass to `go mod edit -go`.
+	"Version": string,
+}
+```
+
+### **Get known vulncheck result**
+Identifier: `gopls.fetch_vulncheck_result`
+
+Fetch the result of latest vulnerability check (`govulncheck`).
+
+Args:
+
+```
+{
+	// The file URI.
+	"URI": string,
+}
+```
+
+Result:
+
+```
+map[golang.org/x/tools/gopls/internal/lsp/protocol.DocumentURI]*golang.org/x/tools/gopls/internal/govulncheck.Result
+```
+
 ### **Toggle gc_details**
 Identifier: `gopls.gc_details`
 
@@ -142,6 +178,37 @@ Args:
 }
 ```
 
+### **List imports of a file and its package**
+Identifier: `gopls.list_imports`
+
+Retrieve a list of imports in the given Go file, and the package it
+belongs to.
+
+Args:
+
+```
+{
+	// The file URI.
+	"URI": string,
+}
+```
+
+Result:
+
+```
+{
+	// Imports is a list of imports in the requested file.
+	"Imports": []{
+		"Path": string,
+		"Name": string,
+	},
+	// PackageImports is a list of all imports in the requested file's package.
+	"PackageImports": []{
+		"Path": string,
+	},
+}
+```
+
 ### **List known packages**
 Identifier: `gopls.list_known_packages`
 
@@ -197,6 +264,50 @@ Args:
 	// The module path to remove.
 	"ModulePath": string,
 	"OnlyDiagnostic": bool,
+}
+```
+
+### **Reset go.mod diagnostics**
+Identifier: `gopls.reset_go_mod_diagnostics`
+
+Reset diagnostics in the go.mod file of a module.
+
+Args:
+
+```
+{
+	"URIArg": {
+		"URI": string,
+	},
+	// Optional: source of the diagnostics to reset.
+	// If not set, all resettable go.mod diagnostics will be cleared.
+	"DiagnosticSource": string,
+}
+```
+
+### **Run govulncheck.**
+Identifier: `gopls.run_govulncheck`
+
+Run vulnerability check (`govulncheck`).
+
+Args:
+
+```
+{
+	// Any document in the directory from which govulncheck will run.
+	"URI": string,
+	// Package pattern. E.g. "", ".", "./...".
+	"Pattern": string,
+}
+```
+
+Result:
+
+```
+{
+	// Token holds the progress token for LSP workDone reporting of the vulncheck
+	// invocation.
+	"Token": interface{},
 }
 ```
 
@@ -347,23 +458,6 @@ Args:
 {
 	// The file URI.
 	"URI": string,
-}
-```
-
-### **Query workspace metadata**
-Identifier: `gopls.workspace_metadata`
-
-Query the server for information about active workspaces.
-
-Result:
-
-```
-{
-	// All workspaces for this session.
-	"Workspaces": []{
-		"Name": string,
-		"ModuleDir": string,
-	},
 }
 ```
 
