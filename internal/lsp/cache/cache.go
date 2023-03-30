@@ -6,7 +6,6 @@ package cache
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
 	"go/ast"
 	"go/token"
@@ -29,23 +28,46 @@ import (
 	"golang.org/x/tools/internal/span"
 )
 
-func New(options func(*source.Options)) *Cache {
+// New Creates a new cache for gopls operation results, using the given file
+// set, shared store, and session options.
+//
+// All of the fset, store and options may be nil, but if store is non-nil so
+// must be fset (and they must always be used together), otherwise it may be
+// possible to get cached data referencing token.Pos values not mapped by the
+// FileSet.
+func New(fset *token.FileSet, store *memoize.Store, options func(*source.Options)) *Cache {
 	index := atomic.AddInt64(&cacheIndex, 1)
+
+	if store != nil && fset == nil {
+		panic("non-nil store with nil fset")
+	}
+	if fset == nil {
+		fset = token.NewFileSet()
+	}
+	if store == nil {
+		store = &memoize.Store{}
+	}
+
 	c := &Cache{
 		id:          strconv.FormatInt(index, 10),
-		fset:        token.NewFileSet(),
+		fset:        fset,
 		options:     options,
+		store:       store,
 		fileContent: map[span.URI]*fileHandle{},
 	}
 	return c
 }
 
 type Cache struct {
-	id      string
-	fset    *token.FileSet
+	id   string
+	fset *token.FileSet
+
+	// TODO(rfindley): it doesn't make sense that cache accepts LSP options, just
+	// so that it can create a session: the cache does not (and should not)
+	// depend on options. Invert this relationship to remove options from Cache.
 	options func(*source.Options)
 
-	store memoize.Store
+	store *memoize.Store
 
 	fileMu      sync.Mutex
 	fileContent map[span.URI]*fileHandle
@@ -55,7 +77,7 @@ type fileHandle struct {
 	modTime time.Time
 	uri     span.URI
 	bytes   []byte
-	hash    string
+	hash    source.Hash
 	err     error
 
 	// size is the file length as reported by Stat, for the purpose of
@@ -69,6 +91,7 @@ func (h *fileHandle) Saved() bool {
 	return true
 }
 
+// GetFile stats and (maybe) reads the file, updates the cache, and returns it.
 func (c *Cache) GetFile(ctx context.Context, uri span.URI) (source.FileHandle, error) {
 	return c.getFile(ctx, uri)
 }
@@ -101,7 +124,7 @@ func (c *Cache) getFile(ctx context.Context, uri span.URI) (*fileHandle, error) 
 		return fh, nil
 	}
 
-	fh, err := readFile(ctx, uri, fi)
+	fh, err := readFile(ctx, uri, fi) // ~25us
 	if err != nil {
 		return nil, err
 	}
@@ -126,7 +149,7 @@ func readFile(ctx context.Context, uri span.URI, fi os.FileInfo) (*fileHandle, e
 	_ = ctx
 	defer done()
 
-	data, err := ioutil.ReadFile(uri.Filename())
+	data, err := ioutil.ReadFile(uri.Filename()) // ~20us
 	if err != nil {
 		return &fileHandle{
 			modTime: fi.ModTime(),
@@ -139,7 +162,7 @@ func readFile(ctx context.Context, uri span.URI, fi os.FileInfo) (*fileHandle, e
 		size:    fi.Size(),
 		uri:     uri,
 		bytes:   data,
-		hash:    hashContents(data),
+		hash:    source.HashOf(data),
 	}, nil
 }
 
@@ -168,28 +191,15 @@ func (h *fileHandle) URI() span.URI {
 	return h.uri
 }
 
-func (h *fileHandle) Kind() source.FileKind {
-	return source.DetectLanguage("", h.uri.Filename())
-}
-
-func (h *fileHandle) Hash() string {
-	return h.hash
-}
-
 func (h *fileHandle) FileIdentity() source.FileIdentity {
 	return source.FileIdentity{
 		URI:  h.uri,
 		Hash: h.hash,
-		Kind: h.Kind(),
 	}
 }
 
 func (h *fileHandle) Read() ([]byte, error) {
 	return h.bytes, h.err
-}
-
-func hashContents(contents []byte) string {
-	return fmt.Sprintf("%x", sha256.Sum256(contents))
 }
 
 var cacheIndex, sessionIndex, viewIndex int64
@@ -212,7 +222,7 @@ func (c *Cache) PackageStats(withNames bool) template.HTML {
 	c.store.DebugOnlyIterate(func(k, v interface{}) {
 		switch k.(type) {
 		case packageHandleKey:
-			v := v.(*packageData)
+			v := v.(typeCheckResult)
 			if v.pkg == nil {
 				break
 			}

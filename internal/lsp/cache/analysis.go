@@ -10,7 +10,6 @@ import (
 	"go/ast"
 	"go/types"
 	"reflect"
-	"sort"
 	"sync"
 
 	"golang.org/x/sync/errgroup"
@@ -21,10 +20,14 @@ import (
 	"golang.org/x/tools/internal/lsp/source"
 	"golang.org/x/tools/internal/memoize"
 	"golang.org/x/tools/internal/span"
-	errors "golang.org/x/xerrors"
 )
 
 func (s *snapshot) Analyze(ctx context.Context, id string, analyzers []*source.Analyzer) ([]*source.Diagnostic, error) {
+	// TODO(adonovan): merge these two loops. There's no need to
+	// construct all the root action handles before beginning
+	// analysis. Operations should be concurrent (though that first
+	// requires buildPackageHandle not to be inefficient when
+	// called in parallel.)
 	var roots []*actionHandle
 	for _, a := range analyzers {
 		if !a.IsEnabled(s.view) {
@@ -55,14 +58,19 @@ func (s *snapshot) Analyze(ctx context.Context, id string, analyzers []*source.A
 	return results, nil
 }
 
-type actionHandleKey string
+type actionKey struct {
+	pkg      packageKey
+	analyzer *analysis.Analyzer
+}
+
+type actionHandleKey source.Hash
 
 // An action represents one unit of analysis work: the application of
 // one analysis to one package. Actions form a DAG, both within a
 // package (as different analyzers are applied, either in sequence or
 // parallel), and across packages (as dependencies are analyzed).
 type actionHandle struct {
-	handle *memoize.Handle
+	promise *memoize.Promise
 
 	analyzer *analysis.Analyzer
 	pkg      *pkg
@@ -87,27 +95,41 @@ type packageFactKey struct {
 }
 
 func (s *snapshot) actionHandle(ctx context.Context, id PackageID, a *analysis.Analyzer) (*actionHandle, error) {
-	ph, err := s.buildPackageHandle(ctx, id, source.ParseFull)
-	if err != nil {
-		return nil, err
-	}
-	act := s.getActionHandle(id, ph.mode, a)
-	if act != nil {
-		return act, nil
-	}
-	if len(ph.key) == 0 {
-		return nil, errors.Errorf("actionHandle: no key for package %s", id)
-	}
-	pkg, err := ph.check(ctx, s)
-	if err != nil {
-		return nil, err
-	}
-	act = &actionHandle{
+	const mode = source.ParseFull
+	key := actionKey{
+		pkg:      packageKey{id: id, mode: mode},
 		analyzer: a,
-		pkg:      pkg,
 	}
+
+	s.mu.Lock()
+	entry, hit := s.actions.Get(key)
+	s.mu.Unlock()
+
+	if hit {
+		return entry.(*actionHandle), nil
+	}
+
+	// TODO(adonovan): opt: this block of code sequentially loads a package
+	// (and all its dependencies), then sequentially creates action handles
+	// for the direct dependencies (whose packages have by then been loaded
+	// as a consequence of ph.check) which does a sequential recursion
+	// down the action graph. Only once all that work is complete do we
+	// put a handle in the cache. As with buildPackageHandle, this does
+	// not exploit the natural parallelism in the problem, and the naive
+	// use of concurrency would lead to an exponential amount of duplicated
+	// work. We should instead use an atomically updated future cache
+	// and a parallel graph traversal.
+	ph, err := s.buildPackageHandle(ctx, id, mode)
+	if err != nil {
+		return nil, err
+	}
+	pkg, err := ph.await(ctx, s)
+	if err != nil {
+		return nil, err
+	}
+
+	// Add a dependency on each required analyzer.
 	var deps []*actionHandle
-	// Add a dependency on each required analyzers.
 	for _, req := range a.Requires {
 		reqActionHandle, err := s.actionHandle(ctx, id, req)
 		if err != nil {
@@ -123,13 +145,8 @@ func (s *snapshot) actionHandle(ctx context.Context, id PackageID, a *analysis.A
 		// An analysis that consumes/produces facts
 		// must run on the package's dependencies too.
 		if len(a.FactTypes) > 0 {
-			importIDs := make([]string, 0, len(ph.m.Deps))
 			for _, importID := range ph.m.Deps {
-				importIDs = append(importIDs, string(importID))
-			}
-			sort.Strings(importIDs) // for determinism
-			for _, importID := range importIDs {
-				depActionHandle, err := s.actionHandle(ctx, PackageID(importID), a)
+				depActionHandle, err := s.actionHandle(ctx, importID, a)
 				if err != nil {
 					return nil, err
 				}
@@ -138,7 +155,7 @@ func (s *snapshot) actionHandle(ctx context.Context, id PackageID, a *analysis.A
 		}
 	}
 
-	h := s.generation.Bind(buildActionKey(a, ph), func(ctx context.Context, arg memoize.Arg) interface{} {
+	promise, release := s.store.Promise(buildActionKey(a, ph), func(ctx context.Context, arg interface{}) interface{} {
 		snapshot := arg.(*snapshot)
 		// Analyze dependencies first.
 		results, err := execAll(ctx, snapshot, deps)
@@ -148,30 +165,45 @@ func (s *snapshot) actionHandle(ctx context.Context, id PackageID, a *analysis.A
 			}
 		}
 		return runAnalysis(ctx, snapshot, a, pkg, results)
-	}, nil)
-	act.handle = h
+	})
 
-	act = s.addActionHandle(act)
-	return act, nil
+	ah := &actionHandle{
+		analyzer: a,
+		pkg:      pkg,
+		promise:  promise,
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Check cache again in case another thread got there first.
+	if result, ok := s.actions.Get(key); ok {
+		release()
+		return result.(*actionHandle), nil
+	}
+
+	s.actions.Set(key, ah, func(_, _ interface{}) { release() })
+
+	return ah, nil
 }
 
 func (act *actionHandle) analyze(ctx context.Context, snapshot *snapshot) ([]*source.Diagnostic, interface{}, error) {
-	d, err := act.handle.Get(ctx, snapshot.generation, snapshot)
+	d, err := snapshot.awaitPromise(ctx, act.promise)
 	if err != nil {
 		return nil, nil, err
 	}
 	data, ok := d.(*actionData)
 	if !ok {
-		return nil, nil, errors.Errorf("unexpected type for %s:%s", act.pkg.ID(), act.analyzer.Name)
+		return nil, nil, fmt.Errorf("unexpected type for %s:%s", act.pkg.ID(), act.analyzer.Name)
 	}
 	if data == nil {
-		return nil, nil, errors.Errorf("unexpected nil analysis for %s:%s", act.pkg.ID(), act.analyzer.Name)
+		return nil, nil, fmt.Errorf("unexpected nil analysis for %s:%s", act.pkg.ID(), act.analyzer.Name)
 	}
 	return data.diagnostics, data.result, data.err
 }
 
 func buildActionKey(a *analysis.Analyzer, ph *packageHandle) actionHandleKey {
-	return actionHandleKey(hashContents([]byte(fmt.Sprintf("%p %s", a, string(ph.key)))))
+	return actionHandleKey(source.Hashf("%p%s", a, ph.key[:]))
 }
 
 func (act *actionHandle) String() string {
@@ -186,13 +218,13 @@ func execAll(ctx context.Context, snapshot *snapshot, actions []*actionHandle) (
 	for _, act := range actions {
 		act := act
 		g.Go(func() error {
-			v, err := act.handle.Get(ctx, snapshot.generation, snapshot)
+			v, err := snapshot.awaitPromise(ctx, act.promise)
 			if err != nil {
 				return err
 			}
 			data, ok := v.(*actionData)
 			if !ok {
-				return errors.Errorf("unexpected type for %s: %T", act, v)
+				return fmt.Errorf("unexpected type for %s: %T", act, v)
 			}
 
 			mu.Lock()
@@ -212,7 +244,7 @@ func runAnalysis(ctx context.Context, snapshot *snapshot, analyzer *analysis.Ana
 	}
 	defer func() {
 		if r := recover(); r != nil {
-			data.err = errors.Errorf("analysis %s for package %s panicked: %v", analyzer.Name, pkg.PkgPath(), r)
+			data.err = fmt.Errorf("analysis %s for package %s panicked: %v", analyzer.Name, pkg.PkgPath(), r)
 		}
 	}()
 
@@ -327,7 +359,7 @@ func runAnalysis(ctx context.Context, snapshot *snapshot, analyzer *analysis.Ana
 	analysisinternal.SetTypeErrors(pass, pkg.typeErrors)
 
 	if pkg.IsIllTyped() {
-		data.err = errors.Errorf("analysis skipped due to errors in package")
+		data.err = fmt.Errorf("analysis skipped due to errors in package")
 		return data
 	}
 	data.result, data.err = pass.Analyzer.Run(pass)
@@ -336,7 +368,7 @@ func runAnalysis(ctx context.Context, snapshot *snapshot, analyzer *analysis.Ana
 	}
 
 	if got, want := reflect.TypeOf(data.result), pass.Analyzer.ResultType; got != want {
-		data.err = errors.Errorf(
+		data.err = fmt.Errorf(
 			"internal error: on package %s, analyzer %s returned a result of type %v, but declared ResultType %v",
 			pass.Pkg.Path(), pass.Analyzer, got, want)
 		return data
@@ -367,7 +399,7 @@ func runAnalysis(ctx context.Context, snapshot *snapshot, analyzer *analysis.Ana
 
 // exportedFrom reports whether obj may be visible to a package that imports pkg.
 // This includes not just the exported members of pkg, but also unexported
-// constants, types, fields, and methods, perhaps belonging to oether packages,
+// constants, types, fields, and methods, perhaps belonging to other packages,
 // that find there way into the API.
 // This is an overapproximation of the more accurate approach used by
 // gc export data, which walks the type graph, but it's much simpler.
@@ -390,7 +422,7 @@ func exportedFrom(obj types.Object, pkg *types.Package) bool {
 func factType(fact analysis.Fact) reflect.Type {
 	t := reflect.TypeOf(fact)
 	if t.Kind() != reflect.Ptr {
-		panic(fmt.Sprintf("invalid Fact type: got %T, want pointer", t))
+		panic(fmt.Sprintf("invalid Fact type: got %T, want pointer", fact))
 	}
 	return t
 }

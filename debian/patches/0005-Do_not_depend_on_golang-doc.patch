@@ -14,10 +14,10 @@ Last-Update: 2019-07-29
  1 file changed, 1 insertion(+)
 
 diff --git a/cmd/godoc/godoc_test.go b/cmd/godoc/godoc_test.go
-index 10ddc31..095e483 100644
+index 1d6a920..2c1ed0e 100644
 --- a/cmd/godoc/godoc_test.go
 +++ b/cmd/godoc/godoc_test.go
-@@ -166,6 +166,7 @@ func killAndWait(cmd *exec.Cmd) {
+@@ -164,6 +164,7 @@ func killAndWait(cmd *exec.Cmd) {
  }
  
  func TestURL(t *testing.T) {

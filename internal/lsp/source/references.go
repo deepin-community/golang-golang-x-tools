@@ -6,16 +6,19 @@ package source
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"go/ast"
+
 	"go/token"
 	"go/types"
 	"sort"
+	"strconv"
 
 	"golang.org/x/tools/internal/event"
+	"golang.org/x/tools/internal/lsp/bug"
 	"golang.org/x/tools/internal/lsp/protocol"
 	"golang.org/x/tools/internal/span"
-	errors "golang.org/x/xerrors"
 )
 
 // ReferenceInfo holds information about reference to an identifier in Go source.
@@ -28,11 +31,71 @@ type ReferenceInfo struct {
 	isDeclaration bool
 }
 
+// isInPackageName reports whether the file's package name surrounds the
+// given position pp (e.g. "foo" surrounds the cursor in "package foo").
+func isInPackageName(ctx context.Context, s Snapshot, f FileHandle, pgf *ParsedGoFile, pp protocol.Position) (bool, error) {
+	// Find position of the package name declaration
+	cursorPos, err := pgf.Mapper.Pos(pp)
+	if err != nil {
+		return false, err
+	}
+
+	return pgf.File.Name.Pos() <= cursorPos && cursorPos <= pgf.File.Name.End(), nil
+}
+
 // References returns a list of references for a given identifier within the packages
 // containing i.File. Declarations appear first in the result.
 func References(ctx context.Context, s Snapshot, f FileHandle, pp protocol.Position, includeDeclaration bool) ([]*ReferenceInfo, error) {
 	ctx, done := event.Start(ctx, "source.References")
 	defer done()
+
+	// Find position of the package name declaration
+	pgf, err := s.ParseGo(ctx, f, ParseFull)
+	if err != nil {
+		return nil, err
+	}
+
+	packageName := pgf.File.Name.Name // from package decl
+	inPackageName, err := isInPackageName(ctx, s, f, pgf, pp)
+	if err != nil {
+		return nil, err
+	}
+
+	if inPackageName {
+		renamingPkg, err := s.PackageForFile(ctx, f.URI(), TypecheckAll, NarrowestPackage)
+		if err != nil {
+			return nil, err
+		}
+
+		// Find external references to the package.
+		rdeps, err := s.GetReverseDependencies(ctx, renamingPkg.ID())
+		if err != nil {
+			return nil, err
+		}
+		var refs []*ReferenceInfo
+		for _, dep := range rdeps {
+			for _, f := range dep.CompiledGoFiles() {
+				for _, imp := range f.File.Imports {
+					if path, err := strconv.Unquote(imp.Path.Value); err == nil && path == renamingPkg.PkgPath() {
+						refs = append(refs, &ReferenceInfo{
+							Name:        packageName,
+							MappedRange: NewMappedRange(f.Tok, f.Mapper, imp.Pos(), imp.End()),
+						})
+					}
+				}
+			}
+		}
+
+		// Find internal references to the package within the package itself
+		for _, f := range renamingPkg.CompiledGoFiles() {
+			refs = append(refs, &ReferenceInfo{
+				Name:        packageName,
+				MappedRange: NewMappedRange(f.Tok, f.Mapper, f.File.Name.Pos(), f.File.Name.End()),
+			})
+		}
+
+		return refs, nil
+	}
 
 	qualifiedObjs, err := qualifiedObjsAtProtocolPos(ctx, s, f.URI(), pp)
 	// Don't return references for builtin types.
@@ -66,7 +129,7 @@ func References(ctx context.Context, s Snapshot, f FileHandle, pp protocol.Posit
 func references(ctx context.Context, snapshot Snapshot, qos []qualifiedObject, includeDeclaration, includeInterfaceRefs, includeEmbeddedRefs bool) ([]*ReferenceInfo, error) {
 	var (
 		references []*ReferenceInfo
-		seen       = make(map[token.Pos]bool)
+		seen       = make(map[positionKey]bool)
 	)
 
 	pos := qos[0].obj.Pos()
@@ -109,10 +172,13 @@ func references(ctx context.Context, snapshot Snapshot, qos []qualifiedObject, i
 		searchPkgs = append(searchPkgs, qo.pkg)
 		for _, pkg := range searchPkgs {
 			for ident, obj := range pkg.GetTypesInfo().Uses {
-				if obj != qo.obj {
-					// If ident is not a use of qo.obj, skip it, with one exception: uses
-					// of an embedded field can be considered references of the embedded
-					// type name.
+				// For instantiated objects (as in methods or fields on instantiated
+				// types), we may not have pointer-identical objects but still want to
+				// consider them references.
+				if !equalOrigin(obj, qo.obj) {
+					// If ident is not a use of qo.obj, skip it, with one exception:
+					// uses of an embedded field can be considered references of the
+					// embedded type name
 					if !includeEmbeddedRefs {
 						continue
 					}
@@ -125,10 +191,15 @@ func references(ctx context.Context, snapshot Snapshot, qos []qualifiedObject, i
 						continue
 					}
 				}
-				if seen[ident.Pos()] {
+				key, found := packagePositionKey(pkg, ident.Pos())
+				if !found {
+					bug.Reportf("ident %v (pos: %v) not found in package %v", ident.Name, ident.Pos(), pkg.Name())
 					continue
 				}
-				seen[ident.Pos()] = true
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
 				rng, err := posToMappedRange(snapshot, pkg, ident.Pos(), ident.End())
 				if err != nil {
 					return nil, err
@@ -165,6 +236,13 @@ func references(ctx context.Context, snapshot Snapshot, qos []qualifiedObject, i
 	}
 
 	return references, nil
+}
+
+// equalOrigin reports whether obj1 and obj2 have equivalent origin object.
+// This may be the case even if obj1 != obj2, if one or both of them is
+// instantiated.
+func equalOrigin(obj1, obj2 types.Object) bool {
+	return obj1.Pkg() == obj2.Pkg() && obj1.Pos() == obj2.Pos() && obj1.Name() == obj2.Name()
 }
 
 // interfaceReferences returns the references to the interfaces implemented by

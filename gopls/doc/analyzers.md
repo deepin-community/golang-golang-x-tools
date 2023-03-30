@@ -108,6 +108,15 @@ errors is discouraged.
 
 **Enabled by default.**
 
+## **embed**
+
+check for //go:embed directive import
+
+This analyzer checks that the embed package is imported when source code contains //go:embed comment directives.
+The embed package must be imported for //go:embed directives to function.import _ "embed".
+
+**Enabled by default.**
+
 ## **errorsas**
 
 report passing non-pointer or non-error values to errors.As
@@ -122,7 +131,7 @@ of the second argument is not a pointer to a type implementing error.
 find structs that would use less memory if their fields were sorted
 
 This analyzer find structs that can be rearranged to use less memory, and provides
-a suggested edit with the optimal order.
+a suggested edit with the most compact order.
 
 Note that there are two different diagnostics reported. One checks struct size,
 and the other reports "pointer bytes" used. Pointer bytes is how many bytes of the
@@ -140,6 +149,11 @@ has 24 pointer bytes because it has to scan further through the *uint32.
 	struct { string; uint32 }
 
 has 8 because it can stop immediately after the string pointer.
+
+Be aware that the most compact order is not always the most efficient.
+In rare cases it may cause two variables each updated by its own goroutine
+to occupy the same CPU cache line, inducing a form of memory contention
+known as "false sharing" that slows down both goroutines.
 
 
 **Disabled by default. Enable it by setting `"analyses": {"fieldalignment": true}`.**
@@ -180,6 +194,22 @@ name but different signatures. Example:
 
 The Read method in v has a different signature than the Read method in
 io.Reader, so this assertion cannot succeed.
+
+
+**Enabled by default.**
+
+## **infertypeargs**
+
+check for unnecessary type arguments in call expressions
+
+Explicit type arguments may be omitted from call expressions if they can be
+inferred from function arguments, or from other type arguments:
+
+	func f[T any](T) {}
+	
+	func _() {
+		f[string]("foo") // string could be inferred
+	}
 
 
 **Enabled by default.**
@@ -558,11 +588,11 @@ Another example is about non-pointer receiver:
 
 check for constraints that could be simplified to "any"
 
-**Enabled by default.**
+**Disabled by default. Enable it by setting `"analyses": {"useany": true}`.**
 
 ## **fillreturns**
 
-suggested fixes for "wrong number of return values (want %d, got %d)"
+suggest fixes for errors due to an incorrect number of return values
 
 This checker provides suggested fixes for type errors of the
 type "wrong number of return values (want %d, got %d)". For example:
@@ -596,10 +626,11 @@ will turn into
 
 ## **noresultvalues**
 
-suggested fixes for "no result values expected"
+suggested fixes for unexpected return values
 
 This checker provides suggested fixes for type errors of the
-type "no result values expected". For example:
+type "no result values expected" or "too many return values".
+For example:
 	func z() { return nil }
 will turn into
 	func z() { return }
@@ -626,6 +657,15 @@ func <>(inferred parameters) {
 
 **Enabled by default.**
 
+## **unusedvariable**
+
+check for unused variables
+
+The unusedvariable analyzer suggests fixes for unused variables errors.
+
+
+**Disabled by default. Enable it by setting `"analyses": {"unusedvariable": true}`.**
+
 ## **fillstruct**
 
 note incomplete struct initializations
@@ -635,6 +675,15 @@ any fields initialized. Because the suggested fix for this analysis is
 expensive to compute, callers should compute it separately, using the
 SuggestedFix function below.
 
+
+**Enabled by default.**
+
+## **stubmethods**
+
+stub methods analyzer
+
+This analyzer generates method stubs for concrete types
+in order to implement a target interface
 
 **Enabled by default.**
 

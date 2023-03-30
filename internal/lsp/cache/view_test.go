@@ -55,6 +55,8 @@ func TestFindWorkspaceRoot(t *testing.T) {
 module a
 -- a/x/x.go
 package x
+-- a/x/y/y.go
+package x
 -- b/go.mod --
 module b
 -- b/c/go.mod --
@@ -79,6 +81,7 @@ module fg
 		{"", "", false}, // no module at root, and more than one nested module
 		{"a", "a", false},
 		{"a/x", "a", false},
+		{"a/x/y", "a", false},
 		{"b/c", "b/c", false},
 		{"d", "d/e", false},
 		{"d", "d", true},
@@ -158,16 +161,56 @@ func TestFilters(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		opts := &source.Options{}
-		opts.DirectoryFilters = tt.filters
+		filterer := source.NewFilterer(tt.filters)
 		for _, inc := range tt.included {
-			if pathExcludedByFilter(inc, "root", "root/gopath/pkg/mod", opts) {
+			if pathExcludedByFilter(inc, filterer) {
 				t.Errorf("filters %q excluded %v, wanted included", tt.filters, inc)
 			}
 		}
 		for _, exc := range tt.excluded {
-			if !pathExcludedByFilter(exc, "root", "root/gopath/pkg/mod", opts) {
+			if !pathExcludedByFilter(exc, filterer) {
 				t.Errorf("filters %q included %v, wanted excluded", tt.filters, exc)
+			}
+		}
+	}
+}
+
+func TestSuffixes(t *testing.T) {
+	type file struct {
+		path string
+		want bool
+	}
+	type cases struct {
+		option []string
+		files  []file
+	}
+	tests := []cases{
+		{[]string{"tmpl", "gotmpl"}, []file{ // default
+			{"foo", false},
+			{"foo.tmpl", true},
+			{"foo.gotmpl", true},
+			{"tmpl", false},
+			{"tmpl.go", false}},
+		},
+		{[]string{"tmpl", "gotmpl", "html", "gohtml"}, []file{
+			{"foo.gotmpl", true},
+			{"foo.html", true},
+			{"foo.gohtml", true},
+			{"html", false}},
+		},
+		{[]string{"tmpl", "gotmpl", ""}, []file{ // possible user mistake
+			{"foo.gotmpl", true},
+			{"foo.go", false},
+			{"foo", false}},
+		},
+	}
+	for _, a := range tests {
+		suffixes := a.option
+		for _, b := range a.files {
+			got := fileHasExtension(b.path, suffixes)
+			if got != b.want {
+				t.Errorf("got %v, want %v, option %q, file %q (%+v)",
+					got, b.want, a.option, b.path, b)
 			}
 		}
 	}

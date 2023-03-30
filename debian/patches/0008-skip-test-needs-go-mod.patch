@@ -1,0 +1,34 @@
+From: Shengjing Zhu <zhsj@debian.org>
+Date: Tue, 17 Nov 2020 02:42:24 +0800
+Subject: skip test needs go mod
+
+Forwarded: not-needed
+---
+ go/packages/overlay_test.go           | 1 +
+ internal/lsp/cmd/capabilities_test.go | 1 +
+ 2 files changed, 2 insertions(+)
+
+diff --git a/go/packages/overlay_test.go b/go/packages/overlay_test.go
+index f2164c2..3f8a318 100644
+--- a/go/packages/overlay_test.go
++++ b/go/packages/overlay_test.go
+@@ -1046,6 +1046,7 @@ func Hi() {
+ // This does not use go/packagestest because it needs to write a replace
+ // directive with an absolute path in one of the module's go.mod files.
+ func TestOverlaysInReplace(t *testing.T) {
++	t.Skip("needs Go mod")
+ 	t.Parallel()
+ 
+ 	// Create module b.com in a temporary directory. Do not add any Go files
+diff --git a/internal/lsp/cmd/capabilities_test.go b/internal/lsp/cmd/capabilities_test.go
+index 1d01b4b..7f7a28b 100644
+--- a/internal/lsp/cmd/capabilities_test.go
++++ b/internal/lsp/cmd/capabilities_test.go
+@@ -20,6 +20,7 @@ import (
+ // TestCapabilities does some minimal validation of the server's adherence to the LSP.
+ // The checks in the test are added as changes are made and errors noticed.
+ func TestCapabilities(t *testing.T) {
++	t.Skip("needs go mod")
+ 	tmpDir, err := ioutil.TempDir("", "fake")
+ 	if err != nil {
+ 		t.Fatal(err)

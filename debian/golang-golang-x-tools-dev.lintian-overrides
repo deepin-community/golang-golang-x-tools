@@ -1,45 +1,22 @@
 # Test files
-arch-dependent-file-in-usr-share usr/share/gocode/src/golang.org/x/tools/go/gccgoexportdata/testdata/errors.gox
-arch-dependent-file-in-usr-share usr/share/gocode/src/golang.org/x/tools/go/gccgoexportdata/testdata/long.a
-arch-dependent-file-in-usr-share usr/share/gocode/src/golang.org/x/tools/go/gccgoexportdata/testdata/short.a
-arch-dependent-file-in-usr-share usr/share/gocode/src/golang.org/x/tools/go/gcexportdata/testdata/errors-ae16.a
-arch-dependent-file-in-usr-share usr/share/gocode/src/golang.org/x/tools/go/internal/gccgoimporter/testdata/escapeinfo.gox
-arch-dependent-file-in-usr-share usr/share/gocode/src/golang.org/x/tools/go/internal/gccgoimporter/testdata/libimportsar.a
-arch-dependent-file-in-usr-share usr/share/gocode/src/golang.org/x/tools/go/internal/gccgoimporter/testdata/time.gox
-arch-dependent-file-in-usr-share usr/share/gocode/src/golang.org/x/tools/go/internal/gccgoimporter/testdata/unicode.gox
-arch-dependent-file-in-usr-share usr/share/gocode/src/golang.org/x/tools/go/internal/gccgoimporter/testdata/v1reflect.gox
-arch-dependent-file-in-usr-share usr/share/gocode/src/golang.org/x/tools/go/internal/gcimporter/testdata/versions/test_go1.11_0i.a
-arch-dependent-file-in-usr-share usr/share/gocode/src/golang.org/x/tools/go/internal/gcimporter/testdata/versions/test_go1.11_6b.a
-arch-dependent-file-in-usr-share usr/share/gocode/src/golang.org/x/tools/go/internal/gcimporter/testdata/versions/test_go1.11_999b.a
-arch-dependent-file-in-usr-share usr/share/gocode/src/golang.org/x/tools/go/internal/gcimporter/testdata/versions/test_go1.11_999i.a
-arch-dependent-file-in-usr-share usr/share/gocode/src/golang.org/x/tools/go/internal/gcimporter/testdata/versions/test_go1.7_0.a
-arch-dependent-file-in-usr-share usr/share/gocode/src/golang.org/x/tools/go/internal/gcimporter/testdata/versions/test_go1.7_1.a
-arch-independent-package-contains-binary-or-object usr/share/gocode/src/golang.org/x/tools/go/gccgoexportdata/testdata/errors.gox
-arch-independent-package-contains-binary-or-object usr/share/gocode/src/golang.org/x/tools/go/gccgoexportdata/testdata/long.a
-arch-independent-package-contains-binary-or-object usr/share/gocode/src/golang.org/x/tools/go/gccgoexportdata/testdata/short.a
-arch-independent-package-contains-binary-or-object usr/share/gocode/src/golang.org/x/tools/go/gcexportdata/testdata/errors-ae16.a
-arch-independent-package-contains-binary-or-object usr/share/gocode/src/golang.org/x/tools/go/internal/gccgoimporter/testdata/escapeinfo.gox
-arch-independent-package-contains-binary-or-object usr/share/gocode/src/golang.org/x/tools/go/internal/gccgoimporter/testdata/libimportsar.a
-arch-independent-package-contains-binary-or-object usr/share/gocode/src/golang.org/x/tools/go/internal/gccgoimporter/testdata/time.gox
-arch-independent-package-contains-binary-or-object usr/share/gocode/src/golang.org/x/tools/go/internal/gccgoimporter/testdata/unicode.gox
-arch-independent-package-contains-binary-or-object usr/share/gocode/src/golang.org/x/tools/go/internal/gccgoimporter/testdata/v1reflect.gox
-arch-independent-package-contains-binary-or-object usr/share/gocode/src/golang.org/x/tools/go/internal/gcimporter/testdata/versions/test_go1.11_0i.a
-arch-independent-package-contains-binary-or-object usr/share/gocode/src/golang.org/x/tools/go/internal/gcimporter/testdata/versions/test_go1.11_6b.a
-arch-independent-package-contains-binary-or-object usr/share/gocode/src/golang.org/x/tools/go/internal/gcimporter/testdata/versions/test_go1.11_999b.a
-arch-independent-package-contains-binary-or-object usr/share/gocode/src/golang.org/x/tools/go/internal/gcimporter/testdata/versions/test_go1.11_999i.a
-arch-independent-package-contains-binary-or-object usr/share/gocode/src/golang.org/x/tools/go/internal/gcimporter/testdata/versions/test_go1.7_0.a
-arch-independent-package-contains-binary-or-object usr/share/gocode/src/golang.org/x/tools/go/internal/gcimporter/testdata/versions/test_go1.7_1.a
-package-contains-documentation-outside-usr-share-doc usr/share/gocode/src/golang.org/x/tools/cmd/goyacc/testdata/expr/README
-package-contains-documentation-outside-usr-share-doc usr/share/gocode/src/golang.org/x/tools/cmd/guru/testdata/src/README.txt
-package-contains-documentation-outside-usr-share-doc usr/share/gocode/src/golang.org/x/tools/present/testdata/README
-package-contains-documentation-outside-usr-share-doc usr/share/gocode/src/golang.org/x/tools/present/testdata/basic.md
-package-contains-documentation-outside-usr-share-doc usr/share/gocode/src/golang.org/x/tools/present/testdata/code.md
-package-contains-documentation-outside-usr-share-doc usr/share/gocode/src/golang.org/x/tools/present/testdata/list.md
-package-contains-documentation-outside-usr-share-doc usr/share/gocode/src/golang.org/x/tools/present/testdata/media.md
-package-contains-documentation-outside-usr-share-doc usr/share/gocode/src/golang.org/x/tools/present/testdata/pre.md
-unstripped-static-library usr/share/gocode/src/golang.org/x/tools/go/internal/gccgoimporter/testdata/libimportsar.a(_go_.o)
+arch-dependent-file-in-usr-share usr/share/gocode/src/golang.org/x/tools/go/gccgoexportdata/testdata/*
+arch-dependent-file-in-usr-share usr/share/gocode/src/golang.org/x/tools/go/gcexportdata/testdata/*
+arch-dependent-file-in-usr-share usr/share/gocode/src/golang.org/x/tools/go/internal/gccgoimporter/testdata/*
+arch-dependent-file-in-usr-share usr/share/gocode/src/golang.org/x/tools/go/internal/gcimporter/testdata/*
+arch-independent-package-contains-binary-or-object usr/share/gocode/src/golang.org/x/tools/go/gccgoexportdata/testdata/*
+arch-independent-package-contains-binary-or-object usr/share/gocode/src/golang.org/x/tools/go/gcexportdata/testdata/*
+arch-independent-package-contains-binary-or-object usr/share/gocode/src/golang.org/x/tools/go/internal/gccgoimporter/testdata/*
+arch-independent-package-contains-binary-or-object usr/share/gocode/src/golang.org/x/tools/go/internal/gcimporter/testdata/*
+package-contains-documentation-outside-usr-share-doc usr/share/gocode/src/golang.org/x/tools/cmd/goyacc/testdata/*
+package-contains-documentation-outside-usr-share-doc usr/share/gocode/src/golang.org/x/tools/internal/imports/testdata/*
+package-contains-documentation-outside-usr-share-doc usr/share/gocode/src/golang.org/x/tools/internal/lsp/testdata/*
+package-contains-documentation-outside-usr-share-doc usr/share/gocode/src/golang.org/x/tools/present/testdata/*
+unpack-message-for-deb-data * usr/share/gocode/src/golang.org/x/tools/go/internal/gcimporter/testdata/*
+unstripped-static-library usr/share/gocode/src/golang.org/x/tools/go/internal/gccgoimporter/testdata/*
 
+repeated-path-segment fieldalignment *
 repeated-path-segment findcall *
+repeated-path-segment golang.org *
 repeated-path-segment ifaceassert *
 repeated-path-segment internal *
 repeated-path-segment lostcancel *
@@ -48,3 +25,4 @@ repeated-path-segment shadow *
 repeated-path-segment src *
 repeated-path-segment stringintconv *
 repeated-path-segment unmarshal *
+repeated-path-segment x *

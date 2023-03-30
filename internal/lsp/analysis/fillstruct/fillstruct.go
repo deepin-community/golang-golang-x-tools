@@ -21,7 +21,9 @@ import (
 	"golang.org/x/tools/go/ast/astutil"
 	"golang.org/x/tools/go/ast/inspector"
 	"golang.org/x/tools/internal/analysisinternal"
+	"golang.org/x/tools/internal/lsp/fuzzy"
 	"golang.org/x/tools/internal/span"
+	"golang.org/x/tools/internal/typeparams"
 )
 
 const Doc = `note incomplete struct initializations
@@ -94,6 +96,16 @@ func run(pass *analysis.Pass) (interface{}, error) {
 			// Ignore fields that are not accessible in the current package.
 			if field.Pkg() != nil && field.Pkg() != pass.Pkg && !field.Exported() {
 				continue
+			}
+			// Ignore structs containing fields that have type parameters for now.
+			// TODO: support type params.
+			if typ, ok := field.Type().(*types.Named); ok {
+				if tparams := typeparams.ForNamed(typ); tparams != nil && tparams.Len() > 0 {
+					return
+				}
+			}
+			if _, ok := field.Type().(*typeparams.TypeParam); ok {
+				return
 			}
 			fillable = true
 			fillableFields = append(fillableFields, fmt.Sprintf("%s: %s", field.Name(), field.Type().String()))
@@ -232,12 +244,12 @@ func SuggestedFix(fset *token.FileSet, rng span.Range, content []byte, file *ast
 				return nil, fmt.Errorf("invalid struct field type: %v", fieldTyp)
 			}
 
-			// Find the identifer whose name is most similar to the name of the field's key.
-			// If we do not find any identifer that matches the pattern, generate a new value.
+			// Find the identifier whose name is most similar to the name of the field's key.
+			// If we do not find any identifier that matches the pattern, generate a new value.
 			// NOTE: We currently match on the name of the field key rather than the field type.
-			value := analysisinternal.FindBestMatch(obj.Field(i).Name(), idents)
+			value := fuzzy.FindBestMatch(obj.Field(i).Name(), idents)
 			if value == nil {
-				value = populateValue(fset, file, pkg, fieldTyp)
+				value = populateValue(file, pkg, fieldTyp)
 			}
 			if value == nil {
 				return nil, nil
@@ -335,7 +347,7 @@ func indent(str, ind []byte) []byte {
 //
 // The reasoning here is that users will call fillstruct with the intention of
 // initializing the struct, in which case setting these fields to nil has no effect.
-func populateValue(fset *token.FileSet, f *ast.File, pkg *types.Package, typ types.Type) ast.Expr {
+func populateValue(f *ast.File, pkg *types.Package, typ types.Type) ast.Expr {
 	under := typ
 	if n, ok := typ.(*types.Named); ok {
 		under = n.Underlying()
@@ -349,12 +361,14 @@ func populateValue(fset *token.FileSet, f *ast.File, pkg *types.Package, typ typ
 			return &ast.Ident{Name: "false"}
 		case u.Info()&types.IsString != 0:
 			return &ast.BasicLit{Kind: token.STRING, Value: `""`}
+		case u.Kind() == types.UnsafePointer:
+			return ast.NewIdent("nil")
 		default:
 			panic("unknown basic type")
 		}
 	case *types.Map:
-		k := analysisinternal.TypeExpr(fset, f, pkg, u.Key())
-		v := analysisinternal.TypeExpr(fset, f, pkg, u.Elem())
+		k := analysisinternal.TypeExpr(f, pkg, u.Key())
+		v := analysisinternal.TypeExpr(f, pkg, u.Elem())
 		if k == nil || v == nil {
 			return nil
 		}
@@ -365,7 +379,7 @@ func populateValue(fset *token.FileSet, f *ast.File, pkg *types.Package, typ typ
 			},
 		}
 	case *types.Slice:
-		s := analysisinternal.TypeExpr(fset, f, pkg, u.Elem())
+		s := analysisinternal.TypeExpr(f, pkg, u.Elem())
 		if s == nil {
 			return nil
 		}
@@ -375,7 +389,7 @@ func populateValue(fset *token.FileSet, f *ast.File, pkg *types.Package, typ typ
 			},
 		}
 	case *types.Array:
-		a := analysisinternal.TypeExpr(fset, f, pkg, u.Elem())
+		a := analysisinternal.TypeExpr(f, pkg, u.Elem())
 		if a == nil {
 			return nil
 		}
@@ -388,7 +402,7 @@ func populateValue(fset *token.FileSet, f *ast.File, pkg *types.Package, typ typ
 			},
 		}
 	case *types.Chan:
-		v := analysisinternal.TypeExpr(fset, f, pkg, u.Elem())
+		v := analysisinternal.TypeExpr(f, pkg, u.Elem())
 		if v == nil {
 			return nil
 		}
@@ -406,7 +420,7 @@ func populateValue(fset *token.FileSet, f *ast.File, pkg *types.Package, typ typ
 			},
 		}
 	case *types.Struct:
-		s := analysisinternal.TypeExpr(fset, f, pkg, typ)
+		s := analysisinternal.TypeExpr(f, pkg, typ)
 		if s == nil {
 			return nil
 		}
@@ -416,7 +430,7 @@ func populateValue(fset *token.FileSet, f *ast.File, pkg *types.Package, typ typ
 	case *types.Signature:
 		var params []*ast.Field
 		for i := 0; i < u.Params().Len(); i++ {
-			p := analysisinternal.TypeExpr(fset, f, pkg, u.Params().At(i).Type())
+			p := analysisinternal.TypeExpr(f, pkg, u.Params().At(i).Type())
 			if p == nil {
 				return nil
 			}
@@ -431,7 +445,7 @@ func populateValue(fset *token.FileSet, f *ast.File, pkg *types.Package, typ typ
 		}
 		var returns []*ast.Field
 		for i := 0; i < u.Results().Len(); i++ {
-			r := analysisinternal.TypeExpr(fset, f, pkg, u.Results().At(i).Type())
+			r := analysisinternal.TypeExpr(f, pkg, u.Results().At(i).Type())
 			if r == nil {
 				return nil
 			}
@@ -466,7 +480,7 @@ func populateValue(fset *token.FileSet, f *ast.File, pkg *types.Package, typ typ
 		default:
 			return &ast.UnaryExpr{
 				Op: token.AND,
-				X:  populateValue(fset, f, pkg, u.Elem()),
+				X:  populateValue(f, pkg, u.Elem()),
 			}
 		}
 	case *types.Interface:

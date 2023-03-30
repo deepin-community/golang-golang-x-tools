@@ -7,6 +7,7 @@ package lsp
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,9 +22,9 @@ import (
 	"golang.org/x/tools/internal/lsp/protocol"
 	"golang.org/x/tools/internal/lsp/source"
 	"golang.org/x/tools/internal/lsp/template"
+	"golang.org/x/tools/internal/lsp/work"
 	"golang.org/x/tools/internal/span"
 	"golang.org/x/tools/internal/xcontext"
-	errors "golang.org/x/xerrors"
 )
 
 // diagnosticSource differentiates different sources of diagnostics.
@@ -35,6 +36,7 @@ const (
 	analysisSource
 	typeCheckSource
 	orphanedSource
+	workSource
 )
 
 // A diagnosticReport holds results for a single diagnostic source.
@@ -64,6 +66,8 @@ func (d diagnosticSource) String() string {
 		return "FromTypeChecking"
 	case orphanedSource:
 		return "FromOrphans"
+	case workSource:
+		return "FromGoWork"
 	default:
 		return fmt.Sprintf("From?%d?", d)
 	}
@@ -210,6 +214,23 @@ func (s *Server) diagnose(ctx context.Context, snapshot source.Snapshot, forceAn
 		s.storeDiagnostics(snapshot, id.URI, modSource, diags)
 	}
 
+	// Diagnose the go.work file, if it exists.
+	workReports, workErr := work.Diagnostics(ctx, snapshot)
+	if ctx.Err() != nil {
+		log.Trace.Log(ctx, "diagnose cancelled")
+		return
+	}
+	if workErr != nil {
+		event.Error(ctx, "warning: diagnose go.work", workErr, tag.Directory.Of(snapshot.View().Folder().Filename()), tag.Snapshot.Of(snapshot.ID()))
+	}
+	for id, diags := range workReports {
+		if id.URI == "" {
+			event.Error(ctx, "missing URI for work file diagnostics", fmt.Errorf("empty URI"), tag.Directory.Of(snapshot.View().Folder().Filename()))
+			continue
+		}
+		s.storeDiagnostics(snapshot, id.URI, workSource, diags)
+	}
+
 	// Diagnose all of the packages in the workspace.
 	wsPkgs, err := snapshot.ActivePackages(ctx)
 	if s.shouldIgnoreError(ctx, snapshot, err) {
@@ -288,7 +309,11 @@ func (s *Server) diagnosePkg(ctx context.Context, snapshot source.Snapshot, pkg 
 		return
 	}
 	for _, cgf := range pkg.CompiledGoFiles() {
-		s.storeDiagnostics(snapshot, cgf.URI, typeCheckSource, pkgDiagnostics[cgf.URI])
+		// builtin.go exists only for documentation purposes, and is not valid Go code.
+		// Don't report distracting errors
+		if !snapshot.IsBuiltin(ctx, cgf.URI) {
+			s.storeDiagnostics(snapshot, cgf.URI, typeCheckSource, pkgDiagnostics[cgf.URI])
+		}
 	}
 	if includeAnalysis && !pkg.HasListOrParseErrors() {
 		reports, err := source.Analyze(ctx, snapshot, pkg, false)
@@ -405,10 +430,10 @@ func (s *Server) showCriticalErrorStatus(ctx context.Context, snapshot source.Sn
 	// If an error is already shown to the user, update it or mark it as
 	// resolved.
 	if errMsg == "" {
-		s.criticalErrorStatus.End("Done.")
+		s.criticalErrorStatus.End(ctx, "Done.")
 		s.criticalErrorStatus = nil
 	} else {
-		s.criticalErrorStatus.Report(errMsg, 0)
+		s.criticalErrorStatus.Report(ctx, errMsg, 0)
 	}
 }
 
@@ -416,7 +441,15 @@ func (s *Server) showCriticalErrorStatus(ctx context.Context, snapshot source.Sn
 // If they cannot and the workspace is not otherwise unloaded, it also surfaces
 // a warning, suggesting that the user check the file for build tags.
 func (s *Server) checkForOrphanedFile(ctx context.Context, snapshot source.Snapshot, fh source.VersionedFileHandle) *source.Diagnostic {
-	if fh.Kind() != source.Go {
+	// TODO(rfindley): this function may fail to produce a diagnostic for a
+	// variety of reasons, some of which should probably not be ignored. For
+	// example, should this function be tolerant of the case where fh does not
+	// exist, or does not have a package name?
+	//
+	// It would be better to panic or report a bug in several of the cases below,
+	// so that we can move toward guaranteeing we show the user a meaningful
+	// error whenever it makes sense.
+	if snapshot.View().FileKind(fh) != source.Go {
 		return nil
 	}
 	// builtin files won't have a package, but they are never orphaned.
@@ -431,7 +464,10 @@ func (s *Server) checkForOrphanedFile(ctx context.Context, snapshot source.Snaps
 	if err != nil {
 		return nil
 	}
-	spn, err := span.NewRange(snapshot.FileSet(), pgf.File.Name.Pos(), pgf.File.Name.End()).Span()
+	if !pgf.File.Name.Pos().IsValid() {
+		return nil
+	}
+	spn, err := span.NewRange(pgf.Tok, pgf.File.Name.Pos(), pgf.File.Name.End()).Span()
 	if err != nil {
 		return nil
 	}

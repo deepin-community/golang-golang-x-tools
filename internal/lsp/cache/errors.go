@@ -16,12 +16,12 @@ import (
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/packages"
 	"golang.org/x/tools/internal/analysisinternal"
+	"golang.org/x/tools/internal/lsp/bug"
 	"golang.org/x/tools/internal/lsp/command"
 	"golang.org/x/tools/internal/lsp/protocol"
 	"golang.org/x/tools/internal/lsp/source"
 	"golang.org/x/tools/internal/span"
 	"golang.org/x/tools/internal/typesinternal"
-	errors "golang.org/x/xerrors"
 )
 
 func goPackagesErrorDiagnostics(snapshot *snapshot, pkg *pkg, e packages.Error) ([]*source.Diagnostic, error) {
@@ -75,7 +75,7 @@ func goPackagesErrorDiagnostics(snapshot *snapshot, pkg *pkg, e packages.Error) 
 func parseErrorDiagnostics(snapshot *snapshot, pkg *pkg, errList scanner.ErrorList) ([]*source.Diagnostic, error) {
 	// The first parser error is likely the root cause of the problem.
 	if errList.Len() <= 0 {
-		return nil, errors.Errorf("no errors in %v", errList)
+		return nil, fmt.Errorf("no errors in %v", errList)
 	}
 	e := errList[0]
 	pgf, err := pkg.File(span.URIFromPath(e.Pos.Filename))
@@ -83,7 +83,7 @@ func parseErrorDiagnostics(snapshot *snapshot, pkg *pkg, errList scanner.ErrorLi
 		return nil, err
 	}
 	pos := pgf.Tok.Pos(e.Pos.Offset)
-	spn, err := span.NewRange(snapshot.FileSet(), pos, pos).Span()
+	spn, err := span.NewRange(pgf.Tok, pos, pos).Span()
 	if err != nil {
 		return nil, err
 	}
@@ -101,6 +101,7 @@ func parseErrorDiagnostics(snapshot *snapshot, pkg *pkg, errList scanner.ErrorLi
 }
 
 var importErrorRe = regexp.MustCompile(`could not import ([^\s]+)`)
+var unsupportedFeatureRe = regexp.MustCompile(`.*require.* go(\d+\.\d+) or later`)
 
 func typeErrorDiagnostics(snapshot *snapshot, pkg *pkg, e extendedError) ([]*source.Diagnostic, error) {
 	code, spn, err := typeErrorData(snapshot.FileSet(), pkg, e.primary)
@@ -145,6 +146,12 @@ func typeErrorDiagnostics(snapshot *snapshot, pkg *pkg, e extendedError) ([]*sou
 			return nil, err
 		}
 	}
+	if match := unsupportedFeatureRe.FindStringSubmatch(e.primary.Msg); match != nil {
+		diag.SuggestedFixes, err = editGoDirectiveQuickFix(snapshot, spn.URI(), match[1])
+		if err != nil {
+			return nil, err
+		}
+	}
 	return []*source.Diagnostic{diag}, nil
 }
 
@@ -165,6 +172,22 @@ func goGetQuickFixes(snapshot *snapshot, uri span.URI, pkg string) ([]source.Sug
 	return []source.SuggestedFix{source.SuggestedFixFromCommand(cmd, protocol.QuickFix)}, nil
 }
 
+func editGoDirectiveQuickFix(snapshot *snapshot, uri span.URI, version string) ([]source.SuggestedFix, error) {
+	// Go mod edit only supports module mode.
+	if snapshot.workspaceMode()&moduleMode == 0 {
+		return nil, nil
+	}
+	title := fmt.Sprintf("go mod edit -go=%s", version)
+	cmd, err := command.NewEditGoDirectiveCommand(title, command.EditGoDirectiveArgs{
+		URI:     protocol.URIFromSpanURI(uri),
+		Version: version,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return []source.SuggestedFix{source.SuggestedFixFromCommand(cmd, protocol.QuickFix)}, nil
+}
+
 func analysisDiagnosticDiagnostics(snapshot *snapshot, pkg *pkg, a *analysis.Analyzer, e *analysis.Diagnostic) ([]*source.Diagnostic, error) {
 	var srcAnalyzer *source.Analyzer
 	// Find the analyzer that generated this diagnostic.
@@ -174,8 +197,15 @@ func analysisDiagnosticDiagnostics(snapshot *snapshot, pkg *pkg, a *analysis.Ana
 			break
 		}
 	}
-
-	spn, err := span.NewRange(snapshot.FileSet(), e.Pos, e.End).Span()
+	tokFile := snapshot.FileSet().File(e.Pos)
+	if tokFile == nil {
+		return nil, bug.Errorf("no file for position of %q diagnostic", e.Category)
+	}
+	end := e.End
+	if !end.IsValid() {
+		end = e.Pos
+	}
+	spn, err := span.NewRange(tokFile, e.Pos, end).Span()
 	if err != nil {
 		return nil, err
 	}
@@ -233,6 +263,9 @@ func analysisDiagnosticDiagnostics(snapshot *snapshot, pkg *pkg, a *analysis.Ana
 // onlyDeletions returns true if all of the suggested fixes are deletions.
 func onlyDeletions(fixes []source.SuggestedFix) bool {
 	for _, fix := range fixes {
+		if fix.Command != nil {
+			return false
+		}
 		for _, edits := range fix.Edits {
 			for _, edit := range edits {
 				if edit.NewText != "" {
@@ -257,7 +290,11 @@ func suggestedAnalysisFixes(snapshot *snapshot, pkg *pkg, diag *analysis.Diagnos
 	for _, fix := range diag.SuggestedFixes {
 		edits := make(map[span.URI][]protocol.TextEdit)
 		for _, e := range fix.TextEdits {
-			spn, err := span.NewRange(snapshot.FileSet(), e.Pos, e.End).Span()
+			tokFile := snapshot.FileSet().File(e.Pos)
+			if tokFile == nil {
+				return nil, bug.Errorf("no file for edit position")
+			}
+			spn, err := span.NewRange(tokFile, e.Pos, e.End).Span()
 			if err != nil {
 				return nil, err
 			}
@@ -285,7 +322,11 @@ func suggestedAnalysisFixes(snapshot *snapshot, pkg *pkg, diag *analysis.Diagnos
 func relatedInformation(pkg *pkg, fset *token.FileSet, diag *analysis.Diagnostic) ([]source.RelatedInformation, error) {
 	var out []source.RelatedInformation
 	for _, related := range diag.Related {
-		spn, err := span.NewRange(fset, related.Pos, related.End).Span()
+		tokFile := fset.File(related.Pos)
+		if tokFile == nil {
+			return nil, bug.Errorf("no file for %q diagnostic position", diag.Category)
+		}
+		spn, err := span.NewRange(tokFile, related.Pos, related.End).Span()
 		if err != nil {
 			return nil, err
 		}
@@ -324,7 +365,7 @@ func typeErrorData(fset *token.FileSet, pkg *pkg, terr types.Error) (typesintern
 }
 
 func parsedGoSpan(pgf *source.ParsedGoFile, start, end token.Pos) (span.Span, error) {
-	return span.FileSpan(pgf.Tok, pgf.Mapper.Converter, start, end)
+	return span.FileSpan(pgf.Mapper.TokFile, pgf.Mapper.TokFile, start, end)
 }
 
 // spanToRange converts a span.Span to a protocol.Range,
@@ -343,8 +384,7 @@ func spanToRange(pkg *pkg, spn span.Span) (protocol.Range, error) {
 // It works only on errors whose message is prefixed by colon,
 // followed by a space (": "). For example:
 //
-//   attributes.go:13:1: expected 'package', found 'type'
-//
+//	attributes.go:13:1: expected 'package', found 'type'
 func parseGoListError(input, wd string) span.Span {
 	input = strings.TrimSpace(input)
 	msgIndex := strings.Index(input, ": ")
@@ -373,7 +413,7 @@ func parseGoListImportCycleError(snapshot *snapshot, e packages.Error, pkg *pkg)
 		// Search file imports for the import that is causing the import cycle.
 		for _, imp := range cgf.File.Imports {
 			if imp.Path.Value == circImp {
-				spn, err := span.NewRange(snapshot.FileSet(), imp.Pos(), imp.End()).Span()
+				spn, err := span.NewRange(cgf.Tok, imp.Pos(), imp.End()).Span()
 				if err != nil {
 					return msg, span.Span{}, false
 				}

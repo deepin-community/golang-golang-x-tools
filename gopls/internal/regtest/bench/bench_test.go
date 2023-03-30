@@ -8,11 +8,12 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"runtime"
 	"runtime/pprof"
 	"testing"
-	"time"
 
 	"golang.org/x/tools/gopls/internal/hooks"
+	"golang.org/x/tools/internal/lsp/bug"
 	"golang.org/x/tools/internal/lsp/fake"
 	. "golang.org/x/tools/internal/lsp/regtest"
 
@@ -20,6 +21,7 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	bug.PanicOnBugs = true
 	Main(m, hooks.Options)
 }
 
@@ -31,10 +33,10 @@ func benchmarkOptions(dir string) []RunOption {
 		// Skip logs as they buffer up memory unnaturally.
 		SkipLogs(),
 		// The Debug server only makes sense if running in singleton mode.
-		Modes(Singleton),
-		// Set a generous timeout. Individual tests should control their own
-		// graceful termination.
-		Timeout(20 * time.Minute),
+		Modes(Default),
+		// Remove the default timeout. Individual tests should control their
+		// own graceful termination.
+		NoDefaultTimeout(),
 
 		// Use the actual proxy, since we want our builds to succeed.
 		GOPROXY("https://proxy.golang.org"),
@@ -65,6 +67,7 @@ func TestBenchmarkIWL(t *testing.T) {
 	results := testing.Benchmark(func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			WithOptions(opts...).Run(t, "", func(t *testing.T, env *Env) {})
+
 		}
 	})
 
@@ -90,14 +93,14 @@ func TestBenchmarkSymbols(t *testing.T) {
 	}
 
 	opts := benchmarkOptions(symbolOptions.workdir)
-	conf := EditorConfig{}
+	settings := make(Settings)
 	if symbolOptions.matcher != "" {
-		conf.SymbolMatcher = &symbolOptions.matcher
+		settings["symbolMatcher"] = symbolOptions.matcher
 	}
 	if symbolOptions.style != "" {
-		conf.SymbolStyle = &symbolOptions.style
+		settings["symbolStyle"] = symbolOptions.style
 	}
-	opts = append(opts, conf)
+	opts = append(opts, settings)
 
 	WithOptions(opts...).Run(t, "", func(t *testing.T, env *Env) {
 		// We can't Await in this test, since we have disabled hooks. Instead, run
@@ -131,7 +134,7 @@ func TestBenchmarkSymbols(t *testing.T) {
 }
 
 var (
-	benchDir     = flag.String("didchange_dir", "", "If set, run benchmarks in this dir. Must also set regtest_bench_file.")
+	benchDir     = flag.String("didchange_dir", "", "If set, run benchmarks in this dir. Must also set didchange_file.")
 	benchFile    = flag.String("didchange_file", "", "The file to modify")
 	benchProfile = flag.String("didchange_cpuprof", "", "file to write cpu profiling data to")
 )
@@ -145,9 +148,9 @@ var (
 // is the path to a workspace root, and -didchange_file is the
 // workspace-relative path to a file to modify. e.g.:
 //
-//  go test -run=TestBenchmarkDidChange \
-//   -didchange_dir=path/to/kubernetes \
-//   -didchange_file=pkg/util/hash/hash.go
+//	go test -run=TestBenchmarkDidChange \
+//	 -didchange_dir=path/to/kubernetes \
+//	 -didchange_file=pkg/util/hash/hash.go
 func TestBenchmarkDidChange(t *testing.T) {
 	if *benchDir == "" {
 		t.Skip("-didchange_dir is not set")
@@ -162,19 +165,22 @@ func TestBenchmarkDidChange(t *testing.T) {
 		env.Await(env.DoneWithOpen())
 		// Insert the text we'll be modifying at the top of the file.
 		env.EditBuffer(*benchFile, fake.Edit{Text: "// __REGTEST_PLACEHOLDER_0__\n"})
-		result := testing.Benchmark(func(b *testing.B) {
-			if *benchProfile != "" {
-				profile, err := os.Create(*benchProfile)
-				if err != nil {
-					t.Fatal(err)
-				}
-				defer profile.Close()
-				if err := pprof.StartCPUProfile(profile); err != nil {
-					t.Fatal(err)
-				}
-				defer pprof.StopCPUProfile()
+
+		// Run the profiler after the initial load,
+		// across all benchmark iterations.
+		if *benchProfile != "" {
+			profile, err := os.Create(*benchProfile)
+			if err != nil {
+				t.Fatal(err)
 			}
-			b.ResetTimer()
+			defer profile.Close()
+			if err := pprof.StartCPUProfile(profile); err != nil {
+				t.Fatal(err)
+			}
+			defer pprof.StopCPUProfile()
+		}
+
+		result := testing.Benchmark(func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				env.EditBuffer(*benchFile, fake.Edit{
 					Start: fake.Pos{Line: 0, Column: 0},
@@ -184,8 +190,36 @@ func TestBenchmarkDidChange(t *testing.T) {
 				})
 				env.Await(StartedChange(uint64(i + 1)))
 			}
-			b.StopTimer()
 		})
 		printBenchmarkResults(result)
+	})
+}
+
+// TestPrintMemStats measures the memory usage of loading a project.
+// It uses the same -didchange_dir flag as above.
+// Always run it in isolation since it measures global heap usage.
+//
+// Kubernetes example:
+//
+//	$ go test -v -run=TestPrintMemStats -didchange_dir=$HOME/w/kubernetes
+//	TotalAlloc:      5766 MB
+//	HeapAlloc:       1984 MB
+//
+// Both figures exhibit variance of less than 1%.
+func TestPrintMemStats(t *testing.T) {
+	if *benchDir == "" {
+		t.Skip("-didchange_dir is not set")
+	}
+
+	// Load the program...
+	opts := benchmarkOptions(*benchDir)
+	WithOptions(opts...).Run(t, "", func(_ *testing.T, env *Env) {
+		// ...and print the memory usage.
+		runtime.GC()
+		runtime.GC()
+		var mem runtime.MemStats
+		runtime.ReadMemStats(&mem)
+		t.Logf("TotalAlloc:\t%d MB", mem.TotalAlloc/1e6)
+		t.Logf("HeapAlloc:\t%d MB", mem.HeapAlloc/1e6)
 	})
 }

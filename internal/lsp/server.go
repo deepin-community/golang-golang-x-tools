@@ -15,7 +15,6 @@ import (
 	"golang.org/x/tools/internal/lsp/protocol"
 	"golang.org/x/tools/internal/lsp/source"
 	"golang.org/x/tools/internal/span"
-	errors "golang.org/x/xerrors"
 )
 
 const concurrentAnalyses = 1
@@ -124,8 +123,8 @@ type pendingModificationSet struct {
 	changes      []source.FileModification
 }
 
-func (s *Server) workDoneProgressCancel(ctx context.Context, params *protocol.WorkDoneProgressCancelParams) error {
-	return s.progress.Cancel(ctx, params.Token)
+func (s *Server) workDoneProgressCancel(params *protocol.WorkDoneProgressCancelParams) error {
+	return s.progress.Cancel(params.Token)
 }
 
 func (s *Server) nonstandardRequest(ctx context.Context, method string, params interface{}) (interface{}, error) {
@@ -162,7 +161,7 @@ func (s *Server) nonstandardRequest(ctx context.Context, method string, params i
 }
 
 func notImplemented(method string) error {
-	return errors.Errorf("%w: %q not yet implemented", jsonrpc2.ErrMethodNotFound, method)
+	return fmt.Errorf("%w: %q not yet implemented", jsonrpc2.ErrMethodNotFound, method)
 }
 
 //go:generate helper/helper -d protocol/tsserver.go -o server_gen.go -u .

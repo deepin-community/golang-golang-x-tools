@@ -7,6 +7,7 @@ package cache
 import (
 	"context"
 	"fmt"
+	"os"
 	"reflect"
 	"strings"
 	"sync"
@@ -27,7 +28,7 @@ type importsState struct {
 	cleanupProcessEnv    func()
 	cacheRefreshDuration time.Duration
 	cacheRefreshTimer    *time.Timer
-	cachedModFileHash    string
+	cachedModFileHash    source.Hash
 	cachedBuildFlags     []string
 }
 
@@ -38,8 +39,13 @@ func (s *importsState) runProcessEnvFunc(ctx context.Context, snapshot *snapshot
 	// Find the hash of the active mod file, if any. Using the unsaved content
 	// is slightly wasteful, since we'll drop caches a little too often, but
 	// the mod file shouldn't be changing while people are autocompleting.
-	var modFileHash string
-	if snapshot.workspaceMode()&usesWorkspaceModule == 0 {
+	var modFileHash source.Hash
+	// If we are using 'legacyWorkspace' mode, we can just read the modfile from
+	// the snapshot. Otherwise, we need to get the synthetic workspace mod file.
+	//
+	// TODO(rfindley): we should be able to just always use the synthetic
+	// workspace module, or alternatively use the go.work file.
+	if snapshot.workspace.moduleSource == legacyWorkspace {
 		for m := range snapshot.workspace.getActiveModFiles() { // range to access the only element
 			modFH, err := snapshot.GetFile(ctx, m)
 			if err != nil {
@@ -56,7 +62,7 @@ func (s *importsState) runProcessEnvFunc(ctx context.Context, snapshot *snapshot
 		if err != nil {
 			return err
 		}
-		modFileHash = hashContents(modBytes)
+		modFileHash = source.HashOf(modBytes)
 	}
 
 	// view.goEnv is immutable -- changes make a new view. Options can change.
@@ -136,20 +142,21 @@ func (s *importsState) populateProcessEnv(ctx context.Context, snapshot *snapsho
 		pe.Logf = nil
 	}
 
-	// Take an extra reference to the snapshot so that its workspace directory
-	// (if any) isn't destroyed while we're using it.
-	release := snapshot.generation.Acquire(ctx)
+	// Extract invocation details from the snapshot to use with goimports.
+	//
+	// TODO(rfindley): refactor to extract the necessary invocation logic into
+	// separate functions. Using goCommandInvocation is unnecessarily indirect,
+	// and has led to memory leaks in the past, when the snapshot was
+	// unintentionally held past its lifetime.
 	_, inv, cleanupInvocation, err := snapshot.goCommandInvocation(ctx, source.LoadWorkspace, &gocommand.Invocation{
 		WorkingDir: snapshot.view.rootURI.Filename(),
 	})
 	if err != nil {
 		return nil, err
 	}
-	pe.WorkingDir = inv.WorkingDir
+
 	pe.BuildFlags = inv.BuildFlags
-	pe.WorkingDir = inv.WorkingDir
-	pe.ModFile = inv.ModFile
-	pe.ModFlag = inv.ModFlag
+	pe.ModFlag = "readonly" // processEnv operations should not mutate the modfile
 	pe.Env = map[string]string{}
 	for _, kv := range inv.Env {
 		split := strings.SplitN(kv, "=", 2)
@@ -158,11 +165,31 @@ func (s *importsState) populateProcessEnv(ctx context.Context, snapshot *snapsho
 		}
 		pe.Env[split[0]] = split[1]
 	}
+	// We don't actually use the invocation, so clean it up now.
+	cleanupInvocation()
 
-	return func() {
-		cleanupInvocation()
-		release()
-	}, nil
+	// If the snapshot uses a synthetic workspace directory, create a copy for
+	// the lifecycle of the importsState.
+	//
+	// Notably, we cannot use the snapshot invocation working directory, as that
+	// is tied to the lifecycle of the snapshot.
+	//
+	// Otherwise return a no-op cleanup function.
+	cleanup = func() {}
+	if snapshot.usesWorkspaceDir() {
+		tmpDir, err := makeWorkspaceDir(ctx, snapshot.workspace, snapshot)
+		if err != nil {
+			return nil, err
+		}
+		pe.WorkingDir = tmpDir
+		cleanup = func() {
+			os.RemoveAll(tmpDir) // ignore error
+		}
+	} else {
+		pe.WorkingDir = snapshot.view.rootURI.Filename()
+	}
+
+	return cleanup, nil
 }
 
 func (s *importsState) refreshProcessEnv() {

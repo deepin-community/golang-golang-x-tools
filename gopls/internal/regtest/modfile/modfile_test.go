@@ -6,10 +6,12 @@ package modfile
 
 import (
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"golang.org/x/tools/gopls/internal/hooks"
+	"golang.org/x/tools/internal/lsp/bug"
 	. "golang.org/x/tools/internal/lsp/regtest"
 
 	"golang.org/x/tools/internal/lsp/protocol"
@@ -18,6 +20,7 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	bug.PanicOnBugs = true
 	Main(m, hooks.Options)
 }
 
@@ -192,6 +195,62 @@ require example.com v1.2.3
 func TestMissingDependencyFixes(t *testing.T) {
 	testenv.NeedsGo1Point(t, 14)
 	const mod = `
+-- a/go.mod --
+module mod.com
+
+go 1.12
+
+-- a/main.go --
+package main
+
+import "example.com/blah"
+import "random.org/blah"
+
+var _, _ = blah.Name, hello.Name
+`
+
+	const want = `module mod.com
+
+go 1.12
+
+require random.org v1.2.3
+`
+
+	RunMultiple{
+		{"default", WithOptions(ProxyFiles(proxy), WorkspaceFolders("a"))},
+		{"nested", WithOptions(ProxyFiles(proxy))},
+	}.Run(t, mod, func(t *testing.T, env *Env) {
+		env.OpenFile("a/main.go")
+		var d protocol.PublishDiagnosticsParams
+		env.Await(
+			OnceMet(
+				env.DiagnosticAtRegexp("a/main.go", `"random.org/blah"`),
+				ReadDiagnostics("a/main.go", &d),
+			),
+		)
+		var randomDiag protocol.Diagnostic
+		for _, diag := range d.Diagnostics {
+			if strings.Contains(diag.Message, "random.org") {
+				randomDiag = diag
+			}
+		}
+		env.ApplyQuickFixes("a/main.go", []protocol.Diagnostic{randomDiag})
+		if got := env.ReadWorkspaceFile("a/go.mod"); got != want {
+			t.Fatalf("unexpected go.mod content:\n%s", tests.Diff(t, want, got))
+		}
+	})
+}
+
+// Tests that multiple missing dependencies gives good single fixes.
+func TestMissingDependencyFixesWithGoWork(t *testing.T) {
+	testenv.NeedsGo1Point(t, 18)
+	const mod = `
+-- go.work --
+go 1.18
+
+use (
+	./a
+)
 -- a/go.mod --
 module mod.com
 
@@ -513,6 +572,10 @@ require (
 
 // Reproduces golang/go#38232.
 func TestUnknownRevision(t *testing.T) {
+	if runtime.GOOS == "plan9" {
+		t.Skipf("skipping test that fails for unknown reasons on plan9; see https://go.dev/issue/50477")
+	}
+
 	testenv.NeedsGo1Point(t, 14)
 
 	const unknown = `
@@ -677,13 +740,9 @@ func main() {
 }
 `
 	WithOptions(
-		EditorConfig{
-			Env: map[string]string{
-				"GOFLAGS": "-mod=readonly",
-			},
-		},
+		EnvVars{"GOFLAGS": "-mod=readonly"},
 		ProxyFiles(proxy),
-		Modes(Singleton),
+		Modes(Default),
 	).Run(t, mod, func(t *testing.T, env *Env) {
 		env.OpenFile("main.go")
 		original := env.ReadWorkspaceFile("go.mod")
@@ -767,9 +826,7 @@ func main() {
 `
 	WithOptions(
 		ProxyFiles(workspaceProxy),
-		EditorConfig{
-			BuildFlags: []string{"-tags", "bob"},
-		},
+		Settings{"buildFlags": []string{"-tags", "bob"}},
 	).Run(t, mod, func(t *testing.T, env *Env) {
 		env.Await(
 			env.DiagnosticAtRegexp("main.go", `"example.com/blah"`),
@@ -798,6 +855,8 @@ func main() {}
 }
 
 func TestSumUpdateFixesDiagnostics(t *testing.T) {
+	t.Skipf("Skipping known-flaky test; see https://go.dev/issue/51352.")
+
 	testenv.NeedsGo1Point(t, 14)
 
 	const mod = `
@@ -863,7 +922,7 @@ func hello() {}
 		// TODO(rFindley) this doesn't work in multi-module workspace mode, because
 		// it keeps around the last parsing modfile. Update this test to also
 		// exercise the workspace module.
-		Modes(Singleton),
+		Modes(Default),
 	).Run(t, mod, func(t *testing.T, env *Env) {
 		env.OpenFile("go.mod")
 		env.Await(env.DoneWithOpen())
@@ -1031,7 +1090,7 @@ func main() {
 `
 	WithOptions(
 		ProxyFiles(workspaceProxy),
-		Modes(Singleton),
+		Modes(Default),
 	).Run(t, mod, func(t *testing.T, env *Env) {
 		env.OpenFile("go.mod")
 		params := &protocol.PublishDiagnosticsParams{}
@@ -1100,7 +1159,7 @@ func main() {
 `
 	WithOptions(
 		ProxyFiles(proxy),
-		Modes(Singleton),
+		Modes(Default),
 	).Run(t, mod, func(t *testing.T, env *Env) {
 		env.OpenFile("main.go")
 		d := &protocol.PublishDiagnosticsParams{}
@@ -1113,5 +1172,22 @@ func main() {
 			EmptyDiagnostics("main.go"),
 			NoDiagnostics("go.mod"),
 		)
+	})
+}
+
+func TestInvalidGoVersion(t *testing.T) {
+	testenv.NeedsGo1Point(t, 14) // Times out on 1.13 for reasons unclear. Not worth worrying about.
+	const files = `
+-- go.mod --
+module mod.com
+
+go foo
+-- main.go --
+package main
+`
+	Run(t, files, func(t *testing.T, env *Env) {
+		env.Await(env.DiagnosticAtRegexpWithMessage("go.mod", `go foo`, "invalid go version"))
+		env.WriteWorkspaceFile("go.mod", "module mod.com \n\ngo 1.12\n")
+		env.Await(EmptyDiagnostics("go.mod"))
 	})
 }

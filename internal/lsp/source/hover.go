@@ -7,6 +7,7 @@ package source
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/constant"
@@ -21,12 +22,35 @@ import (
 
 	"golang.org/x/text/unicode/runenames"
 	"golang.org/x/tools/internal/event"
+	"golang.org/x/tools/internal/lsp/bug"
 	"golang.org/x/tools/internal/lsp/protocol"
+	"golang.org/x/tools/internal/lsp/safetoken"
 	"golang.org/x/tools/internal/typeparams"
-	errors "golang.org/x/xerrors"
 )
 
-type HoverInformation struct {
+// HoverContext contains context extracted from the syntax and type information
+// of a given node, for use in various summaries (hover, autocomplete,
+// signature help).
+type HoverContext struct {
+	// signatureSource is the object or node use to derive the hover signature.
+	//
+	// It may also hold a precomputed string.
+	// TODO(rfindley): pre-compute all signatures to avoid this indirection.
+	signatureSource interface{}
+
+	// comment is the most relevant comment group associated with the hovered object.
+	Comment *ast.CommentGroup
+}
+
+// HoverJSON contains information used by hover. It is also the JSON returned
+// for the "structured" hover format
+type HoverJSON struct {
+	// Synopsis is a single sentence synopsis of the symbol's documentation.
+	Synopsis string `json:"synopsis"`
+
+	// FullDocumentation is the symbol's full documentation.
+	FullDocumentation string `json:"fullDocumentation"`
+
 	// Signature is the symbol's signature.
 	Signature string `json:"signature"`
 
@@ -34,11 +58,8 @@ type HoverInformation struct {
 	// This is recommended only for use in clients that show a single line for hover.
 	SingleLine string `json:"singleLine"`
 
-	// Synopsis is a single sentence synopsis of the symbol's documentation.
-	Synopsis string `json:"synopsis"`
-
-	// FullDocumentation is the symbol's full documentation.
-	FullDocumentation string `json:"fullDocumentation"`
+	// SymbolName is the types.Object.Name for the given symbol.
+	SymbolName string `json:"symbolName"`
 
 	// LinkPath is the pkg.go.dev link for the given symbol.
 	// For example, the "go/ast" part of "pkg.go.dev/go/ast#Node".
@@ -47,23 +68,6 @@ type HoverInformation struct {
 	// LinkAnchor is the pkg.go.dev link anchor for the given symbol.
 	// For example, the "Node" part of "pkg.go.dev/go/ast#Node".
 	LinkAnchor string `json:"linkAnchor"`
-
-	// importPath is the import path for the package containing the given
-	// symbol.
-	importPath string
-
-	// symbolName is the types.Object.Name for the given symbol.
-	symbolName string
-
-	source  interface{}
-	comment *ast.CommentGroup
-
-	// typeName contains the identifier name when the identifier is a type declaration.
-	// If it is not empty, the hover will have the prefix "type <typeName> ".
-	typeName string
-	// isTypeAlias indicates whether the identifier is a type alias declaration.
-	// If it is true, the hover will have the prefix "type <typeName> = ".
-	isTypeAlias bool
 }
 
 func Hover(ctx context.Context, snapshot Snapshot, fh FileHandle, position protocol.Position) (*protocol.Hover, error) {
@@ -81,10 +85,6 @@ func Hover(ctx context.Context, snapshot Snapshot, fh FileHandle, position proto
 	rng, err := ident.Range()
 	if err != nil {
 		return nil, err
-	}
-	// See golang/go#36998: don't link to modules matching GOPRIVATE.
-	if snapshot.View().IsGoPrivatePath(h.importPath) {
-		h.LinkPath = ""
 	}
 	hover, err := FormatHover(h, snapshot.View().Options())
 	if err != nil {
@@ -142,15 +142,10 @@ func findRune(ctx context.Context, snapshot Snapshot, fh FileHandle, position pr
 	if err != nil {
 		return 0, MappedRange{}, err
 	}
-	spn, err := pgf.Mapper.PointSpan(position)
+	pos, err := pgf.Mapper.Pos(position)
 	if err != nil {
 		return 0, MappedRange{}, err
 	}
-	rng, err := spn.Range(pgf.Mapper.Converter)
-	if err != nil {
-		return 0, MappedRange{}, err
-	}
-	pos := rng.Start
 
 	// Find the basic literal enclosing the given position, if there is one.
 	var lit *ast.BasicLit
@@ -203,8 +198,14 @@ func findRune(ctx context.Context, snapshot Snapshot, fh FileHandle, position pr
 		// It's a string, scan only if it contains a unicode escape sequence under or before the
 		// current cursor position.
 		var found bool
-		litOffset := pgf.Tok.Offset(lit.Pos())
-		offset := pgf.Tok.Offset(pos)
+		litOffset, err := safetoken.Offset(pgf.Tok, lit.Pos())
+		if err != nil {
+			return 0, MappedRange{}, err
+		}
+		offset, err := safetoken.Offset(pgf.Tok, pos)
+		if err != nil {
+			return 0, MappedRange{}, err
+		}
 		for i := offset - litOffset; i > 0; i-- {
 			// Start at the cursor position and search backward for the beginning of a rune escape sequence.
 			rr, _ := utf8.DecodeRuneInString(lit.Value[i:])
@@ -242,30 +243,44 @@ func findRune(ctx context.Context, snapshot Snapshot, fh FileHandle, position pr
 	return r, mappedRange, nil
 }
 
-func HoverIdentifier(ctx context.Context, i *IdentifierInfo) (*HoverInformation, error) {
+func HoverIdentifier(ctx context.Context, i *IdentifierInfo) (*HoverJSON, error) {
 	ctx, done := event.Start(ctx, "source.Hover")
 	defer done()
 
-	fset := i.Snapshot.FileSet()
-	h, err := HoverInfo(ctx, i.Snapshot, i.pkg, i.Declaration.obj, i.Declaration.node, i.Declaration.fullDecl)
+	hoverCtx, err := FindHoverContext(ctx, i.Snapshot, i.pkg, i.Declaration.obj, i.Declaration.node, i.Declaration.fullDecl)
 	if err != nil {
 		return nil, err
 	}
+
+	h := &HoverJSON{
+		FullDocumentation: hoverCtx.Comment.Text(),
+		Synopsis:          doc.Synopsis(hoverCtx.Comment.Text()),
+	}
+
+	fset := i.Snapshot.FileSet()
 	// Determine the symbol's signature.
-	switch x := h.source.(type) {
+	switch x := hoverCtx.signatureSource.(type) {
+	case string:
+		h.Signature = x // a pre-computed signature
+
+	case *ast.TypeSpec:
+		x2 := *x
+		// Don't duplicate comments when formatting type specs.
+		x2.Doc = nil
+		x2.Comment = nil
+		var b strings.Builder
+		b.WriteString("type ")
+		if err := format.Node(&b, fset, &x2); err != nil {
+			return nil, err
+		}
+		h.Signature = b.String()
+
 	case ast.Node:
 		var b strings.Builder
 		if err := format.Node(&b, fset, x); err != nil {
 			return nil, err
 		}
 		h.Signature = b.String()
-		if h.typeName != "" {
-			prefix := "type " + h.typeName + " "
-			if h.isTypeAlias {
-				prefix += "= "
-			}
-			h.Signature = prefix + h.Signature
-		}
 
 		// Check if the variable is an integer whose value we can present in a more
 		// user-friendly way, i.e. `var hex = 0xe34e` becomes `var hex = 58190`
@@ -294,22 +309,7 @@ func HoverIdentifier(ctx context.Context, i *IdentifierInfo) (*HoverInformation,
 	if obj == nil {
 		return h, nil
 	}
-	switch obj := obj.(type) {
-	case *types.PkgName:
-		h.importPath = obj.Imported().Path()
-		h.LinkPath = h.importPath
-		h.symbolName = obj.Name()
-		if mod, version, ok := moduleAtVersion(h.LinkPath, i); ok {
-			h.LinkPath = strings.Replace(h.LinkPath, mod, mod+"@"+version, 1)
-		}
-		return h, nil
-	case *types.Builtin:
-		h.importPath = "builtin"
-		h.LinkPath = h.importPath
-		h.LinkAnchor = obj.Name()
-		h.symbolName = h.LinkAnchor
-		return h, nil
-	}
+
 	// Check if the identifier is test-only (and is therefore not part of a
 	// package's API). This is true if the request originated in a test package,
 	// and if the declaration is also found in the same test package.
@@ -318,66 +318,114 @@ func HoverIdentifier(ctx context.Context, i *IdentifierInfo) (*HoverInformation,
 			return h, nil
 		}
 	}
-	// Don't return links for other unexported types.
-	if !obj.Exported() {
-		return h, nil
+
+	h.SymbolName, h.LinkPath, h.LinkAnchor = linkData(obj, i.enclosing)
+
+	// See golang/go#36998: don't link to modules matching GOPRIVATE.
+	//
+	// The path returned by linkData is an import path.
+	if i.Snapshot.View().IsGoPrivatePath(h.LinkPath) {
+		h.LinkPath = ""
+	} else if mod, version, ok := moduleAtVersion(h.LinkPath, i); ok {
+		h.LinkPath = strings.Replace(h.LinkPath, mod, mod+"@"+version, 1)
 	}
-	var rTypeName string
+
+	return h, nil
+}
+
+// linkData returns the name, import path, and anchor to use in building links
+// to obj.
+//
+// If obj is not visible in documentation, the returned name will be empty.
+func linkData(obj types.Object, enclosing *types.TypeName) (name, importPath, anchor string) {
+	// Package names simply link to the package.
+	if obj, ok := obj.(*types.PkgName); ok {
+		return obj.Name(), obj.Imported().Path(), ""
+	}
+
+	// Builtins link to the special builtin package.
+	if obj.Parent() == types.Universe {
+		return obj.Name(), "builtin", obj.Name()
+	}
+
+	// In all other cases, the object must be exported.
+	if !obj.Exported() {
+		return "", "", ""
+	}
+
+	var recv types.Object // If non-nil, the field or method receiver base.
+
 	switch obj := obj.(type) {
 	case *types.Var:
 		// If the object is a field, and we have an associated selector
 		// composite literal, or struct, we can determine the link.
-		if obj.IsField() {
-			if named, ok := i.enclosing.(*types.Named); ok {
-				rTypeName = named.Obj().Name()
-			}
+		if obj.IsField() && enclosing != nil {
+			recv = enclosing
 		}
 	case *types.Func:
 		typ, ok := obj.Type().(*types.Signature)
 		if !ok {
-			return h, nil
+			// Note: this should never happen. go/types guarantees that the type of
+			// *Funcs are Signatures.
+			//
+			// TODO(rfindley): given a 'debug' mode, we should panic here.
+			return "", "", ""
 		}
 		if r := typ.Recv(); r != nil {
-			switch rtyp := Deref(r.Type()).(type) {
-			case *types.Struct:
-				rTypeName = r.Name()
-			case *types.Named:
+			if rtyp, _ := Deref(r.Type()).(*types.Named); rtyp != nil {
 				// If we have an unexported type, see if the enclosing type is
 				// exported (we may have an interface or struct we can link
 				// to). If not, don't show any link.
 				if !rtyp.Obj().Exported() {
-					if named, ok := i.enclosing.(*types.Named); ok && named.Obj().Exported() {
-						rTypeName = named.Obj().Name()
+					if enclosing != nil {
+						recv = enclosing
 					} else {
-						return h, nil
+						return "", "", ""
 					}
 				} else {
-					rTypeName = rtyp.Obj().Name()
+					recv = rtyp.Obj()
 				}
 			}
 		}
 	}
+
+	if recv != nil && !recv.Exported() {
+		return "", "", ""
+	}
+
+	// Either the object or its receiver must be in the package scope.
+	scopeObj := obj
+	if recv != nil {
+		scopeObj = recv
+	}
+	if scopeObj.Pkg() == nil || scopeObj.Pkg().Scope().Lookup(scopeObj.Name()) != scopeObj {
+		return "", "", ""
+	}
+
+	// golang/go#52211: somehow we get here with a nil obj.Pkg
 	if obj.Pkg() == nil {
-		event.Log(ctx, fmt.Sprintf("nil package for %s", obj))
-		return h, nil
+		bug.Report("object with nil pkg", bug.Data{
+			"name": obj.Name(),
+			"type": fmt.Sprintf("%T", obj),
+		})
+		return "", "", ""
 	}
-	h.importPath = obj.Pkg().Path()
-	h.LinkPath = h.importPath
-	if mod, version, ok := moduleAtVersion(h.LinkPath, i); ok {
-		h.LinkPath = strings.Replace(h.LinkPath, mod, mod+"@"+version, 1)
+
+	importPath = obj.Pkg().Path()
+	if recv != nil {
+		anchor = fmt.Sprintf("%s.%s", recv.Name(), obj.Name())
+		name = fmt.Sprintf("(%s.%s).%s", obj.Pkg().Name(), recv.Name(), obj.Name())
+	} else {
+		// For most cases, the link is "package/path#symbol".
+		anchor = obj.Name()
+		name = fmt.Sprintf("%s.%s", obj.Pkg().Name(), obj.Name())
 	}
-	if rTypeName != "" {
-		h.LinkAnchor = fmt.Sprintf("%s.%s", rTypeName, obj.Name())
-		h.symbolName = fmt.Sprintf("(%s.%s).%s", obj.Pkg().Name(), rTypeName, obj.Name())
-		return h, nil
-	}
-	// For most cases, the link is "package/path#symbol".
-	h.LinkAnchor = obj.Name()
-	h.symbolName = fmt.Sprintf("%s.%s", obj.Pkg().Name(), obj.Name())
-	return h, nil
+	return name, importPath, anchor
 }
 
 func moduleAtVersion(path string, i *IdentifierInfo) (string, string, bool) {
+	// TODO(rfindley): moduleAtVersion should not be responsible for deciding
+	// whether or not the link target supports module version links.
 	if strings.ToLower(i.Snapshot.View().Options().LinkTarget) != "pkg.go.dev" {
 		return "", "", false
 	}
@@ -432,11 +480,19 @@ func objectString(obj types.Object, qf types.Qualifier, inferred *types.Signatur
 	return str
 }
 
-// HoverInfo returns a HoverInformation struct for an ast node and its type
-// object. node should be the actual node used in type checking, while fullNode
-// could be a separate node with more complete syntactic information.
-func HoverInfo(ctx context.Context, s Snapshot, pkg Package, obj types.Object, pkgNode ast.Node, fullDecl ast.Decl) (*HoverInformation, error) {
-	var info *HoverInformation
+// FindHoverContext returns a HoverContext struct for an AST node and its
+// declaration object. node should be the actual node used in type checking,
+// while fullNode could be a separate node with more complete syntactic
+// information.
+func FindHoverContext(ctx context.Context, s Snapshot, pkg Package, obj types.Object, pkgNode ast.Node, fullDecl ast.Decl) (*HoverContext, error) {
+	var info *HoverContext
+
+	// Type parameters get their signature from their declaration object.
+	if _, isTypeName := obj.(*types.TypeName); isTypeName {
+		if _, isTypeParam := obj.Type().(*typeparams.TypeParam); isTypeParam {
+			return &HoverContext{signatureSource: obj}, nil
+		}
+	}
 
 	// This is problematic for a number of reasons. We really need to have a more
 	// general mechanism to validate the coherency of AST with type information,
@@ -455,26 +511,30 @@ func HoverInfo(ctx context.Context, s Snapshot, pkg Package, obj types.Object, p
 		// The package declaration.
 		for _, f := range pkg.GetSyntax() {
 			if f.Name == pkgNode {
-				info = &HoverInformation{comment: f.Doc}
+				info = &HoverContext{Comment: f.Doc}
 			}
 		}
 	case *ast.ImportSpec:
 		// Try to find the package documentation for an imported package.
-		if pkgName, ok := obj.(*types.PkgName); ok {
-			imp, err := pkg.GetImport(pkgName.Imported().Path())
-			if err != nil {
-				return nil, err
-			}
-			// Assume that only one file will contain package documentation,
-			// so pick the first file that has a doc comment.
-			for _, file := range imp.GetSyntax() {
-				if file.Doc != nil {
-					info = &HoverInformation{source: obj, comment: file.Doc}
-					break
+		pkgPath, err := strconv.Unquote(node.Path.Value)
+		if err != nil {
+			return nil, err
+		}
+		imp, err := pkg.GetImport(pkgPath)
+		if err != nil {
+			return nil, err
+		}
+		// Assume that only one file will contain package documentation,
+		// so pick the first file that has a doc comment.
+		for _, file := range imp.GetSyntax() {
+			if file.Doc != nil {
+				info = &HoverContext{Comment: file.Doc}
+				if file.Name != nil {
+					info.signatureSource = "package " + file.Name.Name
 				}
+				break
 			}
 		}
-		info = &HoverInformation{source: node}
 	case *ast.GenDecl:
 		switch obj := obj.(type) {
 		case *types.TypeName, *types.Var, *types.Const, *types.Func:
@@ -486,36 +546,62 @@ func HoverInfo(ctx context.Context, s Snapshot, pkg Package, obj types.Object, p
 			// obj may not have been produced by type checking the AST containing
 			// node, so we need to be careful about using token.Pos.
 			tok := s.FileSet().File(obj.Pos())
-			offset := tok.Offset(obj.Pos())
-			tok2 := s.FileSet().File(node.Pos())
+			offset, err := safetoken.Offset(tok, obj.Pos())
+			if err != nil {
+				return nil, err
+			}
+
+			// fullTok and fullPos are the *token.File and object position in for the
+			// full AST.
+			fullTok := s.FileSet().File(node.Pos())
+			fullPos, err := safetoken.Pos(fullTok, offset)
+			if err != nil {
+				return nil, err
+			}
+
 			var spec ast.Spec
 			for _, s := range node.Specs {
 				// Avoid panics by guarding the calls to token.Offset (golang/go#48249).
-				if InRange(tok2, s.Pos()) && InRange(tok2, s.End()) && tok2.Offset(s.Pos()) <= offset && offset <= tok2.Offset(s.End()) {
+				start, err := safetoken.Offset(fullTok, s.Pos())
+				if err != nil {
+					return nil, err
+				}
+				end, err := safetoken.Offset(fullTok, s.End())
+				if err != nil {
+					return nil, err
+				}
+				if start <= offset && offset <= end {
 					spec = s
 					break
 				}
 			}
-			var err error
-			info, err = formatGenDecl(node, spec, obj, obj.Type())
+
+			info, err = hoverGenDecl(node, spec, fullPos, obj)
 			if err != nil {
 				return nil, err
 			}
 		}
 	case *ast.TypeSpec:
 		if obj.Parent() == types.Universe {
-			if obj.Name() == "error" {
-				info = &HoverInformation{source: node}
-			} else {
-				info = &HoverInformation{source: node.Name} // comments not needed for builtins
+			if genDecl, ok := fullDecl.(*ast.GenDecl); ok {
+				info = hoverTypeSpec(node, genDecl)
 			}
 		}
 	case *ast.FuncDecl:
 		switch obj.(type) {
 		case *types.Func:
-			info = &HoverInformation{source: obj, comment: node.Doc}
+			info = &HoverContext{signatureSource: obj, Comment: node.Doc}
 		case *types.Builtin:
-			info = &HoverInformation{source: node.Type, comment: node.Doc}
+			info = &HoverContext{Comment: node.Doc}
+			if sig, err := NewBuiltinSignature(ctx, s, obj.Name()); err == nil {
+				info.signatureSource = "func " + sig.name + sig.Format()
+			} else {
+				// Fall back on the object as a signature source.
+				bug.Report("invalid builtin hover", bug.Data{
+					"err": err.Error(),
+				})
+				info.signatureSource = obj
+			}
 		case *types.Var:
 			// Object is a function param or the field of an anonymous struct
 			// declared with ':='. Skip the first one because only fields
@@ -524,28 +610,19 @@ func HoverInfo(ctx context.Context, s Snapshot, pkg Package, obj types.Object, p
 				break
 			}
 
-			field, err := s.PosToField(ctx, pkg, obj.Pos())
-			if err != nil {
-				return nil, err
-			}
-
+			_, field := FindDeclAndField(pkg.GetSyntax(), obj.Pos())
 			if field != nil {
 				comment := field.Doc
 				if comment.Text() == "" {
 					comment = field.Comment
 				}
-				info = &HoverInformation{source: obj, comment: comment}
+				info = &HoverContext{signatureSource: obj, Comment: comment}
 			}
 		}
 	}
 
 	if info == nil {
-		info = &HoverInformation{source: obj}
-	}
-
-	if info.comment != nil {
-		info.FullDocumentation = info.comment.Text()
-		info.Synopsis = doc.Synopsis(info.FullDocumentation)
+		info = &HoverContext{signatureSource: obj}
 	}
 
 	return info, nil
@@ -569,35 +646,34 @@ func isFunctionParam(obj types.Object, node *ast.FuncDecl) bool {
 	return false
 }
 
-func formatGenDecl(node *ast.GenDecl, spec ast.Spec, obj types.Object, typ types.Type) (*HoverInformation, error) {
-	if _, ok := typ.(*types.Named); ok {
-		switch typ.Underlying().(type) {
-		case *types.Interface, *types.Struct:
-			return formatGenDecl(node, spec, obj, typ.Underlying())
-		}
-	}
+// hoverGenDecl returns hover information an object declared via spec inside
+// of the GenDecl node. obj is the type-checked object corresponding to the
+// declaration, but may have been type-checked using a different AST than the
+// given nodes; fullPos is the position of obj in node's AST.
+func hoverGenDecl(node *ast.GenDecl, spec ast.Spec, fullPos token.Pos, obj types.Object) (*HoverContext, error) {
 	if spec == nil {
-		return nil, errors.Errorf("no spec for node %v at position %v", node, obj.Pos())
+		return nil, fmt.Errorf("no spec for node %v at position %v", node, fullPos)
 	}
 
 	// If we have a field or method.
 	switch obj.(type) {
 	case *types.Var, *types.Const, *types.Func:
-		return formatVar(spec, obj, node), nil
+		return hoverVar(spec, fullPos, obj, node), nil
 	}
 	// Handle types.
 	switch spec := spec.(type) {
 	case *ast.TypeSpec:
-		return formatTypeSpec(spec, node), nil
+		return hoverTypeSpec(spec, node), nil
 	case *ast.ValueSpec:
-		return &HoverInformation{source: spec, comment: spec.Doc}, nil
+		return &HoverContext{signatureSource: spec, Comment: spec.Doc}, nil
 	case *ast.ImportSpec:
-		return &HoverInformation{source: spec, comment: spec.Doc}, nil
+		return &HoverContext{signatureSource: spec, Comment: spec.Doc}, nil
 	}
-	return nil, errors.Errorf("unable to format spec %v (%T)", spec, spec)
+	return nil, fmt.Errorf("unable to format spec %v (%T)", spec, spec)
 }
 
-func formatTypeSpec(spec *ast.TypeSpec, decl *ast.GenDecl) *HoverInformation {
+// TODO(rfindley): rename this function.
+func hoverTypeSpec(spec *ast.TypeSpec, decl *ast.GenDecl) *HoverContext {
 	comment := spec.Doc
 	if comment == nil && decl != nil {
 		comment = decl.Doc
@@ -605,15 +681,13 @@ func formatTypeSpec(spec *ast.TypeSpec, decl *ast.GenDecl) *HoverInformation {
 	if comment == nil {
 		comment = spec.Comment
 	}
-	return &HoverInformation{
-		source:      spec.Type,
-		comment:     comment,
-		typeName:    spec.Name.Name,
-		isTypeAlias: spec.Assign.IsValid(),
+	return &HoverContext{
+		signatureSource: spec,
+		Comment:         comment,
 	}
 }
 
-func formatVar(node ast.Spec, obj types.Object, decl *ast.GenDecl) *HoverInformation {
+func hoverVar(node ast.Spec, fullPos token.Pos, obj types.Object, decl *ast.GenDecl) *HoverContext {
 	var fieldList *ast.FieldList
 	switch spec := node.(type) {
 	case *ast.TypeSpec:
@@ -641,18 +715,18 @@ func formatVar(node ast.Spec, obj types.Object, decl *ast.GenDecl) *HoverInforma
 		// associated values so that we can augment their hover with more information.
 		if _, ok := obj.(*types.Var); ok && spec.Type == nil && len(spec.Values) > 0 {
 			if _, ok := spec.Values[0].(*ast.BasicLit); ok {
-				return &HoverInformation{source: spec, comment: comment}
+				return &HoverContext{signatureSource: spec, Comment: comment}
 			}
 		}
 
-		return &HoverInformation{source: obj, comment: comment}
+		return &HoverContext{signatureSource: obj, Comment: comment}
 	}
 
 	if fieldList != nil {
-		comment := findFieldComment(obj.Pos(), fieldList)
-		return &HoverInformation{source: obj, comment: comment}
+		comment := findFieldComment(fullPos, fieldList)
+		return &HoverContext{signatureSource: obj, Comment: comment}
 	}
-	return &HoverInformation{source: obj, comment: decl.Doc}
+	return &HoverContext{signatureSource: obj, Comment: decl.Doc}
 }
 
 // extractFieldList recursively tries to extract a field list.
@@ -698,11 +772,8 @@ func findFieldComment(pos token.Pos, fieldList *ast.FieldList) *ast.CommentGroup
 	return nil
 }
 
-func FormatHover(h *HoverInformation, options *Options) (string, error) {
-	signature := h.Signature
-	if signature != "" && options.PreferredContentFormat == protocol.Markdown {
-		signature = fmt.Sprintf("```go\n%s\n```", signature)
-	}
+func FormatHover(h *HoverJSON, options *Options) (string, error) {
+	signature := formatSignature(h, options)
 
 	switch options.HoverKind {
 	case SingleLine:
@@ -716,26 +787,50 @@ func FormatHover(h *HoverInformation, options *Options) (string, error) {
 		}
 		return string(b), nil
 	}
+
 	link := formatLink(h, options)
-	switch options.HoverKind {
-	case SynopsisDocumentation:
-		doc := formatDoc(h.Synopsis, options)
-		return formatHover(options, signature, link, doc), nil
-	case FullDocumentation:
-		doc := formatDoc(h.FullDocumentation, options)
-		return formatHover(options, signature, link, doc), nil
+	doc := formatDoc(h, options)
+
+	var b strings.Builder
+	parts := []string{signature, doc, link}
+	for i, el := range parts {
+		if el != "" {
+			b.WriteString(el)
+
+			// Don't write out final newline.
+			if i == len(parts) {
+				continue
+			}
+			// If any elements of the remainder of the list are non-empty,
+			// write a newline.
+			if anyNonEmpty(parts[i+1:]) {
+				if options.PreferredContentFormat == protocol.Markdown {
+					b.WriteString("\n\n")
+				} else {
+					b.WriteRune('\n')
+				}
+			}
+		}
 	}
-	return "", errors.Errorf("no hover for %v", h.source)
+	return b.String(), nil
 }
 
-func formatLink(h *HoverInformation, options *Options) string {
+func formatSignature(h *HoverJSON, options *Options) string {
+	signature := h.Signature
+	if signature != "" && options.PreferredContentFormat == protocol.Markdown {
+		signature = fmt.Sprintf("```go\n%s\n```", signature)
+	}
+	return signature
+}
+
+func formatLink(h *HoverJSON, options *Options) string {
 	if !options.LinksInHover || options.LinkTarget == "" || h.LinkPath == "" {
 		return ""
 	}
 	plainLink := BuildLink(options.LinkTarget, h.LinkPath, h.LinkAnchor)
 	switch options.PreferredContentFormat {
 	case protocol.Markdown:
-		return fmt.Sprintf("[`%s` on %s](%s)", h.symbolName, options.LinkTarget, plainLink)
+		return fmt.Sprintf("[`%s` on %s](%s)", h.SymbolName, options.LinkTarget, plainLink)
 	case protocol.PlainText:
 		return ""
 	default:
@@ -755,35 +850,18 @@ func BuildLink(target, path, anchor string) string {
 	return link + "#" + anchor
 }
 
-func formatDoc(doc string, options *Options) string {
+func formatDoc(h *HoverJSON, options *Options) string {
+	var doc string
+	switch options.HoverKind {
+	case SynopsisDocumentation:
+		doc = h.Synopsis
+	case FullDocumentation:
+		doc = h.FullDocumentation
+	}
 	if options.PreferredContentFormat == protocol.Markdown {
 		return CommentToMarkdown(doc)
 	}
 	return doc
-}
-
-func formatHover(options *Options, x ...string) string {
-	var b strings.Builder
-	for i, el := range x {
-		if el != "" {
-			b.WriteString(el)
-
-			// Don't write out final newline.
-			if i == len(x) {
-				continue
-			}
-			// If any elements of the remainder of the list are non-empty,
-			// write a newline.
-			if anyNonEmpty(x[i+1:]) {
-				if options.PreferredContentFormat == protocol.Markdown {
-					b.WriteString("\n\n")
-				} else {
-					b.WriteRune('\n')
-				}
-			}
-		}
-	}
-	return b.String()
 }
 
 func anyNonEmpty(x []string) bool {
@@ -793,4 +871,100 @@ func anyNonEmpty(x []string) bool {
 		}
 	}
 	return false
+}
+
+// FindDeclAndField returns the var/func/type/const Decl that declares
+// the identifier at pos, searching the given list of file syntax
+// trees. If pos is the position of an ast.Field or one of its Names
+// or Ellipsis.Elt, the field is returned, along with the innermost
+// enclosing Decl, which could be only loosely related---consider:
+//
+//    var decl = f(  func(field int) {}  )
+//
+// It returns (nil, nil) if no Field or Decl is found at pos.
+func FindDeclAndField(files []*ast.File, pos token.Pos) (decl ast.Decl, field *ast.Field) {
+	// panic(nil) breaks off the traversal and
+	// causes the function to return normally.
+	defer func() {
+		if x := recover(); x != nil {
+			panic(x)
+		}
+	}()
+
+	// Visit the files in search of the node at pos.
+	var stack []ast.Node
+	for _, file := range files {
+		ast.Inspect(file, func(n ast.Node) bool {
+			if n != nil {
+				stack = append(stack, n) // push
+			} else {
+				stack = stack[:len(stack)-1] // pop
+				return false
+			}
+
+			// Skip subtrees (incl. files) that don't contain the search point.
+			if !(n.Pos() <= pos && pos < n.End()) {
+				return false
+			}
+
+			switch n := n.(type) {
+			case *ast.Field:
+				checkField := func(f ast.Node) {
+					if f.Pos() == pos {
+						field = n
+						for i := len(stack) - 1; i >= 0; i-- {
+							if d, ok := stack[i].(ast.Decl); ok {
+								decl = d // innermost enclosing decl
+								break
+							}
+						}
+						panic(nil) // found
+					}
+				}
+
+				// Check *ast.Field itself. This handles embedded
+				// fields which have no associated *ast.Ident name.
+				checkField(n)
+
+				// Check each field name since you can have
+				// multiple names for the same type expression.
+				for _, name := range n.Names {
+					checkField(name)
+				}
+
+				// Also check "X" in "...X". This makes it easy
+				// to format variadic signature params properly.
+				if ell, ok := n.Type.(*ast.Ellipsis); ok && ell.Elt != nil {
+					checkField(ell.Elt)
+				}
+
+			case *ast.FuncDecl:
+				if n.Name.Pos() == pos {
+					decl = n
+					panic(nil) // found
+				}
+
+			case *ast.GenDecl:
+				for _, spec := range n.Specs {
+					switch spec := spec.(type) {
+					case *ast.TypeSpec:
+						if spec.Name.Pos() == pos {
+							decl = n
+							panic(nil) // found
+						}
+					case *ast.ValueSpec:
+						for _, id := range spec.Names {
+							if id.Pos() == pos {
+								decl = n
+								panic(nil) // found
+							}
+						}
+					}
+				}
+			}
+			return true
+		})
+	}
+
+	return nil, nil
 }

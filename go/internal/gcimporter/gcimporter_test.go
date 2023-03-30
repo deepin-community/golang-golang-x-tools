@@ -10,6 +10,7 @@ package gcimporter
 import (
 	"bytes"
 	"fmt"
+	"go/build"
 	"go/constant"
 	"go/types"
 	"io/ioutil"
@@ -22,7 +23,6 @@ import (
 	"time"
 
 	"golang.org/x/tools/internal/testenv"
-	"golang.org/x/tools/internal/typeparams"
 )
 
 func TestMain(m *testing.M) {
@@ -31,20 +31,6 @@ func TestMain(m *testing.M) {
 }
 
 // ----------------------------------------------------------------------------
-
-// skipSpecialPlatforms causes the test to be skipped for platforms where
-// builders (build.golang.org) don't have access to compiled packages for
-// import.
-func skipSpecialPlatforms(t *testing.T) {
-	switch platform := runtime.GOOS + "-" + runtime.GOARCH; platform {
-	case "nacl-amd64p32",
-		"nacl-386",
-		"nacl-arm",
-		"darwin-arm",
-		"darwin-arm64":
-		t.Skipf("no compiled packages available for import on %s", platform)
-	}
-}
 
 func needsCompiler(t *testing.T, compiler string) {
 	if runtime.Compiler == compiler {
@@ -59,6 +45,10 @@ func needsCompiler(t *testing.T, compiler string) {
 // compile runs the compiler on filename, with dirname as the working directory,
 // and writes the output file to outdirname.
 func compile(t *testing.T, dirname, filename, outdirname string) string {
+	return compilePkg(t, dirname, filename, outdirname, "p")
+}
+
+func compilePkg(t *testing.T, dirname, filename, outdirname, pkg string) string {
 	testenv.NeedsGoBuild(t)
 
 	// filename must end with ".go"
@@ -67,12 +57,12 @@ func compile(t *testing.T, dirname, filename, outdirname string) string {
 	}
 	basename := filepath.Base(filename)
 	outname := filepath.Join(outdirname, basename[:len(basename)-2]+"o")
-	cmd := exec.Command("go", "tool", "compile", "-o", outname, filename)
+	cmd := exec.Command("go", "tool", "compile", "-p="+pkg, "-o", outname, filename)
 	cmd.Dir = dirname
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Logf("%s", out)
-		t.Fatalf("go tool compile %s failed: %s", filename, err)
+		t.Fatalf("(cd %v && %v) failed: %s", cmd.Dir, cmd, err)
 	}
 	return outname
 }
@@ -107,12 +97,6 @@ func testDir(t *testing.T, dir string, endTime time.Time) (nimports int) {
 			for _, ext := range pkgExts {
 				if strings.HasSuffix(f.Name(), ext) {
 					name := f.Name()[0 : len(f.Name())-len(ext)] // remove extension
-					if testenv.UsesGenerics(name) && !typeparams.Enabled {
-						// golang/go#48632: Skip generic packages when type parameters are
-						// not enabled, as a temporary measure to allow avoiding the new
-						// go/types API on Go 1.18.
-						continue
-					}
 					if testPath(t, filepath.Join(dir, name), dir) != nil {
 						nimports++
 					}
@@ -160,7 +144,11 @@ func TestImportTestdata(t *testing.T) {
 		// For now, we just test the presence of a few packages
 		// that we know are there for sure.
 		got := fmt.Sprint(pkg.Imports())
-		for _, want := range []string{"go/ast", "go/token"} {
+		wants := []string{"go/ast", "go/token"}
+		if unifiedIR {
+			wants = []string{"go/ast"}
+		}
+		for _, want := range wants {
 			if !strings.Contains(got, want) {
 				t.Errorf(`Package("exports").Imports() = %s, does not contain %s`, got, want)
 			}
@@ -169,7 +157,9 @@ func TestImportTestdata(t *testing.T) {
 }
 
 func TestVersionHandling(t *testing.T) {
-	skipSpecialPlatforms(t) // we really only need to exclude nacl platforms, but this is fine
+	if debug {
+		t.Skip("TestVersionHandling panics in debug mode")
+	}
 
 	// This package only handles gc export data.
 	needsCompiler(t, "gc")
@@ -248,8 +238,6 @@ func TestVersionHandling(t *testing.T) {
 }
 
 func TestImportStdLib(t *testing.T) {
-	skipSpecialPlatforms(t)
-
 	// This package only handles gc export data.
 	needsCompiler(t, "gc")
 
@@ -276,7 +264,7 @@ var importedObjectTests = []struct {
 	{"go/internal/gcimporter.FindPkg", "func FindPkg(path string, srcDir string) (filename string, id string)"},
 
 	// interfaces
-	{"context.Context", "type Context interface{Deadline() (deadline time.Time, ok bool); Done() <-chan struct{}; Err() error; Value(key interface{}) interface{}}"},
+	{"context.Context", "type Context interface{Deadline() (deadline time.Time, ok bool); Done() <-chan struct{}; Err() error; Value(key any) any}"},
 	{"crypto.Decrypter", "type Decrypter interface{Decrypt(rand io.Reader, msg []byte, opts DecrypterOpts) (plaintext []byte, err error); Public() PublicKey}"},
 	{"encoding.BinaryMarshaler", "type BinaryMarshaler interface{MarshalBinary() (data []byte, err error)}"},
 	{"io.Reader", "type Reader interface{Read(p []byte) (n int, err error)}"},
@@ -285,10 +273,20 @@ var importedObjectTests = []struct {
 	{"go/types.Type", "type Type interface{String() string; Underlying() Type}"},
 }
 
+// TODO(rsc): Delete this init func after x/tools no longer needs to test successfully with Go 1.17.
+func init() {
+	if build.Default.ReleaseTags[len(build.Default.ReleaseTags)-1] <= "go1.17" {
+		for i := range importedObjectTests {
+			if importedObjectTests[i].name == "context.Context" {
+				// Expand any to interface{}.
+				importedObjectTests[i].want = "type Context interface{Deadline() (deadline time.Time, ok bool); Done() <-chan struct{}; Err() error; Value(key interface{}) interface{}}"
+			}
+		}
+	}
+}
+
 func TestImportedTypes(t *testing.T) {
 	testenv.NeedsGo1Point(t, 11)
-	skipSpecialPlatforms(t)
-
 	// This package only handles gc export data.
 	needsCompiler(t, "gc")
 
@@ -298,6 +296,12 @@ func TestImportedTypes(t *testing.T) {
 			continue // error reported elsewhere
 		}
 		got := types.ObjectString(obj, types.RelativeTo(obj.Pkg()))
+
+		// TODO(rsc): Delete this block once go.dev/cl/368254 lands.
+		if got != test.want && test.want == strings.ReplaceAll(got, "interface{}", "any") {
+			got = test.want
+		}
+
 		if got != test.want {
 			t.Errorf("%s: got %q; want %q", test.name, got, test.want)
 		}
@@ -310,8 +314,6 @@ func TestImportedTypes(t *testing.T) {
 
 func TestImportedConsts(t *testing.T) {
 	testenv.NeedsGo1Point(t, 11)
-	skipSpecialPlatforms(t)
-
 	tests := []struct {
 		name string
 		want constant.Kind
@@ -370,6 +372,14 @@ func verifyInterfaceMethodRecvs(t *testing.T, named *types.Named, level int) {
 		return // not an interface
 	}
 
+	// The unified IR importer always sets interface method receiver
+	// parameters to point to the Interface type, rather than the Named.
+	// See #49906.
+	var want types.Type = named
+	if unifiedIR {
+		want = iface
+	}
+
 	// check explicitly declared methods
 	for i := 0; i < iface.NumExplicitMethods(); i++ {
 		m := iface.ExplicitMethod(i)
@@ -378,8 +388,8 @@ func verifyInterfaceMethodRecvs(t *testing.T, named *types.Named, level int) {
 			t.Errorf("%s: missing receiver type", m)
 			continue
 		}
-		if recv.Type() != named {
-			t.Errorf("%s: got recv type %s; want %s", m, recv.Type(), named)
+		if recv.Type() != want {
+			t.Errorf("%s: got recv type %s; want %s", m, recv.Type(), want)
 		}
 	}
 
@@ -393,8 +403,6 @@ func verifyInterfaceMethodRecvs(t *testing.T, named *types.Named, level int) {
 }
 
 func TestIssue5815(t *testing.T) {
-	skipSpecialPlatforms(t)
-
 	// This package only handles gc export data.
 	needsCompiler(t, "gc")
 
@@ -420,8 +428,6 @@ func TestIssue5815(t *testing.T) {
 
 // Smoke test to ensure that imported methods get the correct package.
 func TestCorrectMethodPackage(t *testing.T) {
-	skipSpecialPlatforms(t)
-
 	// This package only handles gc export data.
 	needsCompiler(t, "gc")
 
@@ -441,8 +447,6 @@ func TestCorrectMethodPackage(t *testing.T) {
 }
 
 func TestIssue13566(t *testing.T) {
-	skipSpecialPlatforms(t)
-
 	// This package only handles gc export data.
 	needsCompiler(t, "gc")
 
@@ -463,7 +467,7 @@ func TestIssue13566(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	compile(t, "testdata", "a.go", testoutdir)
+	compilePkg(t, "testdata", "a.go", testoutdir, apkg(testoutdir))
 	compile(t, testoutdir, bpath, testoutdir)
 
 	// import must succeed (test for issue at hand)
@@ -478,8 +482,6 @@ func TestIssue13566(t *testing.T) {
 }
 
 func TestIssue13898(t *testing.T) {
-	skipSpecialPlatforms(t)
-
 	// This package only handles gc export data.
 	needsCompiler(t, "gc")
 
@@ -522,8 +524,6 @@ func TestIssue13898(t *testing.T) {
 }
 
 func TestIssue15517(t *testing.T) {
-	skipSpecialPlatforms(t)
-
 	// This package only handles gc export data.
 	needsCompiler(t, "gc")
 
@@ -559,8 +559,6 @@ func TestIssue15517(t *testing.T) {
 }
 
 func TestIssue15920(t *testing.T) {
-	skipSpecialPlatforms(t)
-
 	// This package only handles gc export data.
 	needsCompiler(t, "gc")
 
@@ -574,8 +572,6 @@ func TestIssue15920(t *testing.T) {
 }
 
 func TestIssue20046(t *testing.T) {
-	skipSpecialPlatforms(t)
-
 	// This package only handles gc export data.
 	needsCompiler(t, "gc")
 
@@ -595,8 +591,6 @@ func TestIssue20046(t *testing.T) {
 
 func TestIssue25301(t *testing.T) {
 	testenv.NeedsGo1Point(t, 11)
-	skipSpecialPlatforms(t)
-
 	// This package only handles gc export data.
 	needsCompiler(t, "gc")
 
@@ -607,6 +601,46 @@ func TestIssue25301(t *testing.T) {
 	}
 
 	compileAndImportPkg(t, "issue25301")
+}
+
+func TestIssue51836(t *testing.T) {
+	testenv.NeedsGo1Point(t, 18) // requires generics
+
+	// This package only handles gc export data.
+	needsCompiler(t, "gc")
+
+	// On windows, we have to set the -D option for the compiler to avoid having a drive
+	// letter and an illegal ':' in the import path - just skip it (see also issue #3483).
+	if runtime.GOOS == "windows" {
+		t.Skip("avoid dealing with relative paths/drive letters on windows")
+	}
+
+	tmpdir := mktmpdir(t)
+	defer os.RemoveAll(tmpdir)
+	testoutdir := filepath.Join(tmpdir, "testdata")
+
+	dir := filepath.Join("testdata", "issue51836")
+	// Following the pattern of TestIssue13898, aa.go needs to be compiled from
+	// the output directory. We pass the full path to compile() so that we don't
+	// have to copy the file to that directory.
+	bpath, err := filepath.Abs(filepath.Join(dir, "aa.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	compilePkg(t, dir, "a.go", testoutdir, apkg(testoutdir))
+	compile(t, testoutdir, bpath, testoutdir)
+
+	// import must succeed (test for issue at hand)
+	_ = importPkg(t, "./testdata/aa", tmpdir)
+}
+
+// apkg returns the package "a" prefixed by (as a package) testoutdir
+func apkg(testoutdir string) string {
+	apkg := testoutdir + "/a"
+	if os.PathSeparator != '/' {
+		apkg = strings.ReplaceAll(apkg, string(os.PathSeparator), "/")
+	}
+	return apkg
 }
 
 func importPkg(t *testing.T, path, srcDir string) *types.Package {

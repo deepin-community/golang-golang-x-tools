@@ -10,6 +10,7 @@ import (
 	"io"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -47,21 +48,25 @@ import (
 	"golang.org/x/tools/go/analysis/passes/unsafeptr"
 	"golang.org/x/tools/go/analysis/passes/unusedresult"
 	"golang.org/x/tools/go/analysis/passes/unusedwrite"
+	"golang.org/x/tools/go/packages"
+	"golang.org/x/tools/internal/lsp/analysis/embeddirective"
 	"golang.org/x/tools/internal/lsp/analysis/fillreturns"
 	"golang.org/x/tools/internal/lsp/analysis/fillstruct"
+	"golang.org/x/tools/internal/lsp/analysis/infertypeargs"
 	"golang.org/x/tools/internal/lsp/analysis/nonewvars"
 	"golang.org/x/tools/internal/lsp/analysis/noresultvalues"
 	"golang.org/x/tools/internal/lsp/analysis/simplifycompositelit"
 	"golang.org/x/tools/internal/lsp/analysis/simplifyrange"
 	"golang.org/x/tools/internal/lsp/analysis/simplifyslice"
+	"golang.org/x/tools/internal/lsp/analysis/stubmethods"
 	"golang.org/x/tools/internal/lsp/analysis/undeclaredname"
 	"golang.org/x/tools/internal/lsp/analysis/unusedparams"
+	"golang.org/x/tools/internal/lsp/analysis/unusedvariable"
 	"golang.org/x/tools/internal/lsp/analysis/useany"
 	"golang.org/x/tools/internal/lsp/command"
 	"golang.org/x/tools/internal/lsp/diff"
 	"golang.org/x/tools/internal/lsp/diff/myers"
 	"golang.org/x/tools/internal/lsp/protocol"
-	errors "golang.org/x/xerrors"
 )
 
 var (
@@ -80,13 +85,14 @@ func DefaultOptions() *Options {
 		}
 		defaultOptions = &Options{
 			ClientOptions: ClientOptions{
-				InsertTextFormat:                  protocol.PlainTextTextFormat,
-				PreferredContentFormat:            protocol.Markdown,
-				ConfigurationSupported:            true,
-				DynamicConfigurationSupported:     true,
-				DynamicWatchedFilesSupported:      true,
-				LineFoldingOnly:                   false,
-				HierarchicalDocumentSymbolSupport: true,
+				InsertTextFormat:                           protocol.PlainTextTextFormat,
+				PreferredContentFormat:                     protocol.Markdown,
+				ConfigurationSupported:                     true,
+				DynamicConfigurationSupported:              true,
+				DynamicRegistrationSemanticTokensSupported: true,
+				DynamicWatchedFilesSupported:               true,
+				LineFoldingOnly:                            false,
+				HierarchicalDocumentSymbolSupport:          true,
 			},
 			ServerOptions: ServerOptions{
 				SupportedCodeActions: map[FileKind]map[protocol.CodeActionKind]bool{
@@ -101,6 +107,7 @@ func DefaultOptions() *Options {
 						protocol.SourceOrganizeImports: true,
 						protocol.QuickFix:              true,
 					},
+					Work: {},
 					Sum:  {},
 					Tmpl: {},
 				},
@@ -112,6 +119,7 @@ func DefaultOptions() *Options {
 					ExperimentalPackageCacheKey: true,
 					MemoryMode:                  ModeNormal,
 					DirectoryFilters:            []string{"-node_modules"},
+					TemplateExtensions:          []string{},
 				},
 				UIOptions: UIOptions{
 					DiagnosticOptions: DiagnosticOptions{
@@ -123,6 +131,7 @@ func DefaultOptions() *Options {
 							Nil:    true,
 						},
 					},
+					InlayHintOptions: InlayHintOptions{},
 					DocumentationOptions: DocumentationOptions{
 						HoverKind:    FullDocumentation,
 						LinkTarget:   "pkg.go.dev",
@@ -130,7 +139,7 @@ func DefaultOptions() *Options {
 					},
 					NavigationOptions: NavigationOptions{
 						ImportShortcut: Both,
-						SymbolMatcher:  SymbolFuzzy,
+						SymbolMatcher:  SymbolFastFuzzy,
 						SymbolStyle:    DynamicSymbols,
 					},
 					CompletionOptions: CompletionOptions{
@@ -182,18 +191,19 @@ type Options struct {
 // ClientOptions holds LSP-specific configuration that is provided by the
 // client.
 type ClientOptions struct {
-	InsertTextFormat                  protocol.InsertTextFormat
-	ConfigurationSupported            bool
-	DynamicConfigurationSupported     bool
-	DynamicWatchedFilesSupported      bool
-	PreferredContentFormat            protocol.MarkupKind
-	LineFoldingOnly                   bool
-	HierarchicalDocumentSymbolSupport bool
-	SemanticTypes                     []string
-	SemanticMods                      []string
-	RelatedInformationSupported       bool
-	CompletionTags                    bool
-	CompletionDeprecated              bool
+	InsertTextFormat                           protocol.InsertTextFormat
+	ConfigurationSupported                     bool
+	DynamicConfigurationSupported              bool
+	DynamicRegistrationSemanticTokensSupported bool
+	DynamicWatchedFilesSupported               bool
+	PreferredContentFormat                     protocol.MarkupKind
+	LineFoldingOnly                            bool
+	HierarchicalDocumentSymbolSupport          bool
+	SemanticTypes                              []string
+	SemanticMods                               []string
+	RelatedInformationSupported                bool
+	CompletionTags                             bool
+	CompletionDeprecated                       bool
 }
 
 // ServerOptions holds LSP-specific configuration that is provided by the
@@ -228,6 +238,11 @@ type BuildOptions struct {
 	// Include only project_a, but not node_modules inside it: `-`, `+project_a`, `-project_a/node_modules`
 	DirectoryFilters []string
 
+	// TemplateExtensions gives the extensions of file names that are treateed
+	// as template files. (The extension
+	// is the part of the file name after the final dot.)
+	TemplateExtensions []string
+
 	// MemoryMode controls the tradeoff `gopls` makes between memory usage and
 	// correctness.
 	//
@@ -245,10 +260,6 @@ type BuildOptions struct {
 	// ExperimentalWorkspaceModule opts a user into the experimental support
 	// for multi-module workspaces.
 	ExperimentalWorkspaceModule bool `status:"experimental"`
-
-	// ExperimentalTemplateSupport opts into the experimental support
-	// for template files.
-	ExperimentalTemplateSupport bool `status:"experimental"`
 
 	// ExperimentalPackageCacheKey controls whether to use a coarser cache key
 	// for package type information to increase cache hits. This setting removes
@@ -280,10 +291,11 @@ type UIOptions struct {
 	CompletionOptions
 	NavigationOptions
 	DiagnosticOptions
+	InlayHintOptions
 
 	// Codelenses overrides the enabled/disabled state of code lenses. See the
 	// "Code Lenses" section of the
-	// [Settings page](https://github.com/golang/tools/blob/master/gopls/doc/settings.md)
+	// [Settings page](https://github.com/golang/tools/blob/master/gopls/doc/settings.md#code-lenses)
 	// for the list of supported lenses.
 	//
 	// Example Usage:
@@ -321,7 +333,7 @@ type CompletionOptions struct {
 	// candidates.
 	Matcher Matcher `status:"advanced"`
 
-	// ExperimentalPostfixCompletions enables artifical method snippets
+	// ExperimentalPostfixCompletions enables artificial method snippets
 	// such as "someSlice.sort!".
 	ExperimentalPostfixCompletions bool `status:"experimental"`
 }
@@ -398,6 +410,13 @@ type DiagnosticOptions struct {
 	ExperimentalWatchedFileDelay time.Duration `status:"experimental"`
 }
 
+type InlayHintOptions struct {
+	// Hints specify inlay hints that users want to see.
+	// A full list of hints that gopls uses can be found
+	// [here](https://github.com/golang/tools/blob/master/gopls/doc/inlayHints.md).
+	Hints map[string]bool `status:"experimental"`
+}
+
 type NavigationOptions struct {
 	// ImportShortcut specifies whether import statements should link to
 	// documentation or go to definitions.
@@ -455,15 +474,36 @@ func (u *UserOptions) SetEnvSlice(env []string) {
 // Hooks contains configuration that is provided to the Gopls command by the
 // main package.
 type Hooks struct {
-	LicensesText         string
-	GoDiff               bool
-	ComputeEdits         diff.ComputeEdits
-	URLRegexp            *regexp.Regexp
-	GofumptFormat        func(ctx context.Context, src []byte) ([]byte, error)
+	// LicensesText holds third party licenses for software used by gopls.
+	LicensesText string
+
+	// GoDiff is used in gopls/hooks to get Myers' diff
+	GoDiff bool
+
+	// Whether staticcheck is supported.
+	StaticcheckSupported bool
+
+	// ComputeEdits is used to compute edits between file versions.
+	ComputeEdits diff.ComputeEdits
+
+	// URLRegexp is used to find potential URLs in comments/strings.
+	//
+	// Not all matches are shown to the user: if the matched URL is not detected
+	// as valid, it will be skipped.
+	URLRegexp *regexp.Regexp
+
+	// GofumptFormat allows the gopls module to wire-in a call to
+	// gofumpt/format.Source. langVersion and modulePath are used for some
+	// Gofumpt formatting rules -- see the Gofumpt documentation for details.
+	GofumptFormat func(ctx context.Context, langVersion, modulePath string, src []byte) ([]byte, error)
+
 	DefaultAnalyzers     map[string]*Analyzer
 	TypeErrorAnalyzers   map[string]*Analyzer
 	ConvenienceAnalyzers map[string]*Analyzer
 	StaticcheckAnalyzers map[string]*Analyzer
+
+	// Govulncheck is the implementation of the Govulncheck gopls command.
+	Govulncheck func(context.Context, *packages.Config, command.VulncheckArgs) (command.VulncheckResult, error)
 }
 
 // InternalOptions contains settings that are not intended for use by the
@@ -511,11 +551,24 @@ type InternalOptions struct {
 	// }
 	// ```
 	//
-	// At the location of the `<>` in this program, deep completion would suggest the result `x.str`.
+	// At the location of the `<>` in this program, deep completion would suggest
+	// the result `x.str`.
 	DeepCompletion bool
 
 	// TempModfile controls the use of the -modfile flag in Go 1.14.
 	TempModfile bool
+
+	// ShowBugReports causes a message to be shown when the first bug is reported
+	// on the server.
+	// This option applies only during initialization.
+	ShowBugReports bool
+
+	// NewDiff controls the choice of the new diff implementation.
+	// It can be 'new', 'checked', or 'old' which is the default.
+	// 'checked' computes diffs with both algorithms, checks
+	// that the new algorithm has worked, and write some summary
+	// statistics to a file in os.TmpDir()
+	NewDiff string
 }
 
 type ImportShortcut string
@@ -599,9 +652,6 @@ type OptionResult struct {
 	Name  string
 	Value interface{}
 	Error error
-
-	State       OptionState
-	Replacement string
 }
 
 type OptionState int
@@ -640,7 +690,7 @@ func SetOptions(options *Options, opts interface{}) OptionResults {
 	default:
 		results = append(results, OptionResult{
 			Value: opts,
-			Error: errors.Errorf("Invalid options type %T", opts),
+			Error: fmt.Errorf("Invalid options type %T", opts),
 		})
 	}
 	return results
@@ -654,6 +704,7 @@ func (o *Options) ForClientCapabilities(caps protocol.ClientCapabilities) {
 	// Check if the client supports configuration messages.
 	o.ConfigurationSupported = caps.Workspace.Configuration
 	o.DynamicConfigurationSupported = caps.Workspace.DidChangeConfiguration.DynamicRegistration
+	o.DynamicRegistrationSemanticTokensSupported = caps.TextDocument.SemanticTokens.DynamicRegistration
 	o.DynamicWatchedFilesSupported = caps.Workspace.DidChangeWatchedFiles.DynamicRegistration
 
 	// Check which types of content format are supported by this client.
@@ -673,7 +724,7 @@ func (o *Options) ForClientCapabilities(caps protocol.ClientCapabilities) {
 
 	// Check if the client supports diagnostic related information.
 	o.RelatedInformationSupported = caps.TextDocument.PublishDiagnostics.RelatedInformation
-	// Check if the client completion support incliudes tags (preferred) or deprecation
+	// Check if the client completion support includes tags (preferred) or deprecation
 	if caps.TextDocument.Completion.CompletionItem.TagSupport.ValueSet != nil {
 		o.CompletionTags = true
 	} else if caps.TextDocument.Completion.CompletionItem.DeprecatedSupport {
@@ -686,10 +737,12 @@ func (o *Options) Clone() *Options {
 		ClientOptions:   o.ClientOptions,
 		InternalOptions: o.InternalOptions,
 		Hooks: Hooks{
-			GoDiff:        o.Hooks.GoDiff,
-			ComputeEdits:  o.Hooks.ComputeEdits,
-			GofumptFormat: o.GofumptFormat,
-			URLRegexp:     o.URLRegexp,
+			GoDiff:               o.GoDiff,
+			StaticcheckSupported: o.StaticcheckSupported,
+			ComputeEdits:         o.ComputeEdits,
+			GofumptFormat:        o.GofumptFormat,
+			URLRegexp:            o.URLRegexp,
+			Govulncheck:          o.Govulncheck,
 		},
 		ServerOptions: o.ServerOptions,
 		UserOptions:   o.UserOptions,
@@ -743,9 +796,9 @@ func (o *Options) AddStaticcheckAnalyzer(a *analysis.Analyzer, enabled bool, sev
 func (o *Options) EnableAllExperiments() {
 	o.SemanticTokens = true
 	o.ExperimentalPostfixCompletions = true
-	o.ExperimentalTemplateSupport = true
 	o.ExperimentalUseInvalidMetadata = true
 	o.ExperimentalWatchedFileDelay = 50 * time.Millisecond
+	o.SymbolMatcher = SymbolFastFuzzy
 }
 
 func (o *Options) enableAllExperimentMaps() {
@@ -755,6 +808,33 @@ func (o *Options) enableAllExperimentMaps() {
 	if _, ok := o.Analyses[unusedparams.Analyzer.Name]; !ok {
 		o.Analyses[unusedparams.Analyzer.Name] = true
 	}
+	if _, ok := o.Analyses[unusedvariable.Analyzer.Name]; !ok {
+		o.Analyses[unusedvariable.Analyzer.Name] = true
+	}
+}
+
+// validateDirectoryFilter validates if the filter string
+// - is not empty
+// - start with either + or -
+// - doesn't contain currently unsupported glob operators: *, ?
+func validateDirectoryFilter(ifilter string) (string, error) {
+	filter := fmt.Sprint(ifilter)
+	if filter == "" || (filter[0] != '+' && filter[0] != '-') {
+		return "", fmt.Errorf("invalid filter %v, must start with + or -", filter)
+	}
+	segs := strings.Split(filter, "/")
+	unsupportedOps := [...]string{"?", "*"}
+	for _, seg := range segs {
+		if seg != "**" {
+			for _, op := range unsupportedOps {
+				if strings.Contains(seg, op) {
+					return "", fmt.Errorf("invalid filter %v, operator %v not supported. If you want to have this operator supported, consider filing an issue.", filter, op)
+				}
+			}
+		}
+	}
+
+	return strings.TrimRight(filepath.FromSlash(filter), "/"), nil
 }
 
 func (o *Options) set(name string, value interface{}, seen map[string]struct{}) OptionResult {
@@ -801,9 +881,9 @@ func (o *Options) set(name string, value interface{}, seen map[string]struct{}) 
 		}
 		var filters []string
 		for _, ifilter := range ifilters {
-			filter := fmt.Sprint(ifilter)
-			if filter[0] != '+' && filter[0] != '-' {
-				result.errorf("invalid filter %q, must start with + or -", filter)
+			filter, err := validateDirectoryFilter(fmt.Sprintf("%v", ifilter))
+			if err != nil {
+				result.errorf(err.Error())
 				return result
 			}
 			filters = append(filters, strings.TrimRight(filepath.FromSlash(filter), "/"))
@@ -879,6 +959,9 @@ func (o *Options) set(name string, value interface{}, seen map[string]struct{}) 
 	case "analyses":
 		result.setBoolMap(&o.Analyses)
 
+	case "hints":
+		result.setBoolMap(&o.Hints)
+
 	case "annotations":
 		result.setAnnotationMap(&o.Annotations)
 
@@ -897,12 +980,19 @@ func (o *Options) set(name string, value interface{}, seen map[string]struct{}) 
 		// codelens is deprecated, but still works for now.
 		// TODO(rstambler): Remove this for the gopls/v0.7.0 release.
 		if name == "codelens" {
-			result.State = OptionDeprecated
-			result.Replacement = "codelenses"
+			result.deprecated("codelenses")
 		}
 
 	case "staticcheck":
-		result.setBool(&o.Staticcheck)
+		if v, ok := result.asBool(); ok {
+			o.Staticcheck = v
+			if v && !o.StaticcheckSupported {
+				// Warn if the user is trying to enable staticcheck, but staticcheck is
+				// unsupported.
+				result.Error = fmt.Errorf("applying setting %q: staticcheck is not supported at %s\n"+
+					"\trebuild gopls with a more recent version of Go", result.Name, runtime.Version())
+			}
+		}
 
 	case "local":
 		result.setString(&o.Local)
@@ -916,6 +1006,9 @@ func (o *Options) set(name string, value interface{}, seen map[string]struct{}) 
 	case "tempModfile":
 		result.setBool(&o.TempModfile)
 
+	case "showBugReports":
+		result.setBool(&o.ShowBugReports)
+
 	case "gofumpt":
 		result.setBool(&o.Gofumpt)
 
@@ -928,16 +1021,29 @@ func (o *Options) set(name string, value interface{}, seen map[string]struct{}) 
 	case "experimentalPostfixCompletions":
 		result.setBool(&o.ExperimentalPostfixCompletions)
 
-	case "experimentalWorkspaceModule":
+	case "experimentalWorkspaceModule": // TODO(rfindley): suggest go.work on go1.18+
 		result.setBool(&o.ExperimentalWorkspaceModule)
 
-	case "experimentalTemplateSupport":
-		result.setBool(&o.ExperimentalTemplateSupport)
+	case "experimentalTemplateSupport": // TODO(pjw): remove after June 2022
+		result.deprecated("")
 
+	case "templateExtensions":
+		if iexts, ok := value.([]interface{}); ok {
+			ans := []string{}
+			for _, x := range iexts {
+				ans = append(ans, fmt.Sprint(x))
+			}
+			o.TemplateExtensions = ans
+			break
+		}
+		if value == nil {
+			o.TemplateExtensions = nil
+			break
+		}
+		result.errorf(fmt.Sprintf("unexpected type %T not []string", value))
 	case "experimentalDiagnosticsDelay", "diagnosticsDelay":
 		if name == "experimentalDiagnosticsDelay" {
-			result.State = OptionDeprecated
-			result.Replacement = "diagnosticsDelay"
+			result.deprecated("diagnosticsDelay")
 		}
 		result.setDuration(&o.DiagnosticsDelay)
 
@@ -960,57 +1066,74 @@ func (o *Options) set(name string, value interface{}, seen map[string]struct{}) 
 		// This setting should be handled before all of the other options are
 		// processed, so do nothing here.
 
+	case "newDiff":
+		result.setString(&o.NewDiff)
+
 	// Replaced settings.
 	case "experimentalDisabledAnalyses":
-		result.State = OptionDeprecated
-		result.Replacement = "analyses"
+		result.deprecated("analyses")
 
 	case "disableDeepCompletion":
-		result.State = OptionDeprecated
-		result.Replacement = "deepCompletion"
+		result.deprecated("deepCompletion")
 
 	case "disableFuzzyMatching":
-		result.State = OptionDeprecated
-		result.Replacement = "fuzzyMatching"
+		result.deprecated("fuzzyMatching")
 
 	case "wantCompletionDocumentation":
-		result.State = OptionDeprecated
-		result.Replacement = "completionDocumentation"
+		result.deprecated("completionDocumentation")
 
 	case "wantUnimportedCompletions":
-		result.State = OptionDeprecated
-		result.Replacement = "completeUnimported"
+		result.deprecated("completeUnimported")
 
 	case "fuzzyMatching":
-		result.State = OptionDeprecated
-		result.Replacement = "matcher"
+		result.deprecated("matcher")
 
 	case "caseSensitiveCompletion":
-		result.State = OptionDeprecated
-		result.Replacement = "matcher"
+		result.deprecated("matcher")
 
 	// Deprecated settings.
 	case "wantSuggestedFixes":
-		result.State = OptionDeprecated
+		result.deprecated("")
 
 	case "noIncrementalSync":
-		result.State = OptionDeprecated
+		result.deprecated("")
 
 	case "watchFileChanges":
-		result.State = OptionDeprecated
+		result.deprecated("")
 
 	case "go-diff":
-		result.State = OptionDeprecated
+		result.deprecated("")
 
 	default:
-		result.State = OptionUnexpected
+		result.unexpected()
 	}
 	return result
 }
 
 func (r *OptionResult) errorf(msg string, values ...interface{}) {
 	prefix := fmt.Sprintf("parsing setting %q: ", r.Name)
-	r.Error = errors.Errorf(prefix+msg, values...)
+	r.Error = fmt.Errorf(prefix+msg, values...)
+}
+
+// A SoftError is an error that does not affect the functionality of gopls.
+type SoftError struct {
+	msg string
+}
+
+func (e *SoftError) Error() string {
+	return e.msg
+}
+
+func (r *OptionResult) deprecated(replacement string) {
+	msg := fmt.Sprintf("gopls setting %q is deprecated", r.Name)
+	if replacement != "" {
+		msg = fmt.Sprintf("%s, use %q instead", msg, replacement)
+	}
+	r.Error = &SoftError{msg}
+}
+
+func (r *OptionResult) unexpected() {
+	r.Error = fmt.Errorf("unexpected gopls setting %q", r.Name)
 }
 
 func (r *OptionResult) asBool() (bool, bool) {
@@ -1185,6 +1308,10 @@ func typeErrorAnalyzers() map[string]*Analyzer {
 			Fix:      UndeclaredName,
 			Enabled:  true,
 		},
+		unusedvariable.Analyzer.Name: {
+			Analyzer: unusedvariable.Analyzer,
+			Enabled:  false,
+		},
 	}
 }
 
@@ -1195,6 +1322,12 @@ func convenienceAnalyzers() map[string]*Analyzer {
 			Fix:        FillStruct,
 			Enabled:    true,
 			ActionKind: []protocol.CodeActionKind{protocol.RefactorRewrite},
+		},
+		stubmethods.Analyzer.Name: {
+			Analyzer:   stubmethods.Analyzer,
+			ActionKind: []protocol.CodeActionKind{protocol.RefactorRewrite},
+			Fix:        StubMethods,
+			Enabled:    true,
 		},
 	}
 }
@@ -1237,7 +1370,9 @@ func defaultAnalyzers() map[string]*Analyzer {
 		testinggoroutine.Analyzer.Name: {Analyzer: testinggoroutine.Analyzer, Enabled: true},
 		unusedparams.Analyzer.Name:     {Analyzer: unusedparams.Analyzer, Enabled: false},
 		unusedwrite.Analyzer.Name:      {Analyzer: unusedwrite.Analyzer, Enabled: false},
-		useany.Analyzer.Name:           {Analyzer: useany.Analyzer, Enabled: true},
+		useany.Analyzer.Name:           {Analyzer: useany.Analyzer, Enabled: false},
+		infertypeargs.Analyzer.Name:    {Analyzer: infertypeargs.Analyzer, Enabled: true},
+		embeddirective.Analyzer.Name:   {Analyzer: embeddirective.Analyzer, Enabled: true},
 
 		// gofmt -s suite:
 		simplifycompositelit.Analyzer.Name: {
@@ -1270,6 +1405,7 @@ type APIJSON struct {
 	Commands  []*CommandJSON
 	Lenses    []*LensJSON
 	Analyzers []*AnalyzerJSON
+	Hints     []*HintJSON
 }
 
 type OptionJSON struct {
@@ -1315,12 +1451,9 @@ func collectEnums(opt *OptionJSON) string {
 	write := func(name, doc string, index, len int) {
 		if doc != "" {
 			unbroken := parBreakRE.ReplaceAllString(doc, "\\\n")
-			fmt.Fprintf(&b, "* %s", unbroken)
+			fmt.Fprintf(&b, "* %s\n", strings.TrimSpace(unbroken))
 		} else {
-			fmt.Fprintf(&b, "* `%s`", name)
-		}
-		if index < len-1 {
-			fmt.Fprint(&b, "\n")
+			fmt.Fprintf(&b, "* `%s`\n", name)
 		}
 	}
 	if len(opt.EnumValues) > 0 && opt.Type == "enum" {
@@ -1338,12 +1471,8 @@ func collectEnums(opt *OptionJSON) string {
 }
 
 func shouldShowEnumKeysInSettings(name string) bool {
-	// Both of these fields have too many possible options to print.
-	return !hardcodedEnumKeys(name)
-}
-
-func hardcodedEnumKeys(name string) bool {
-	return name == "analyses" || name == "codelenses"
+	// These fields have too many possible options to print.
+	return !(name == "analyses" || name == "codelenses" || name == "hints")
 }
 
 type EnumKeys struct {
@@ -1410,4 +1539,18 @@ func (a *AnalyzerJSON) String() string {
 
 func (a *AnalyzerJSON) Write(w io.Writer) {
 	fmt.Fprintf(w, "%s (%s): %v", a.Name, a.Doc, a.Default)
+}
+
+type HintJSON struct {
+	Name    string
+	Doc     string
+	Default bool
+}
+
+func (h *HintJSON) String() string {
+	return h.Name
+}
+
+func (h *HintJSON) Write(w io.Writer) {
+	fmt.Fprintf(w, "%s (%s): %v", h.Name, h.Doc, h.Default)
 }

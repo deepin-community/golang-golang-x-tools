@@ -14,7 +14,6 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
-	"runtime"
 	"unicode/utf8"
 
 	"golang.org/x/tools/internal/lsp"
@@ -53,22 +52,16 @@ type semtok struct {
 var colmap *protocol.ColumnMapper
 
 func (c *semtok) Name() string      { return "semtok" }
+func (c *semtok) Parent() string    { return c.app.Name() }
 func (c *semtok) Usage() string     { return "<filename>" }
 func (c *semtok) ShortHelp() string { return "show semantic tokens for the specified file" }
 func (c *semtok) DetailedHelp(f *flag.FlagSet) {
-	for i := 1; ; i++ {
-		_, f, l, ok := runtime.Caller(i)
-		if !ok {
-			break
-		}
-		log.Printf("%d: %s:%d", i, f, l)
-	}
 	fmt.Fprint(f.Output(), `
 Example: show the semantic tokens for this file:
 
-  $ gopls semtok internal/lsp/cmd/semtok.go
+	$ gopls semtok internal/lsp/cmd/semtok.go
 `)
-	f.PrintDefaults()
+	printFlagDefaults(f)
 }
 
 // Run performs the semtok on the files specified by args and prints the
@@ -124,12 +117,7 @@ func (c *semtok) Run(ctx context.Context, args ...string) error {
 		// can't happen; just parsed this file
 		return fmt.Errorf("can't find %s in fset", args[0])
 	}
-	tc := span.NewContentConverter(args[0], buf)
-	colmap = &protocol.ColumnMapper{
-		URI:       span.URI(args[0]),
-		Content:   buf,
-		Converter: tc,
-	}
+	colmap = protocol.NewColumnMapper(uri, buf)
 	err = decorate(file.uri.Filename(), resp.Data)
 	if err != nil {
 		return err

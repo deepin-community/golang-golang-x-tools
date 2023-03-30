@@ -6,6 +6,7 @@ package source_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"golang.org/x/tools/internal/lsp/bug"
 	"golang.org/x/tools/internal/lsp/cache"
 	"golang.org/x/tools/internal/lsp/diff"
 	"golang.org/x/tools/internal/lsp/diff/myers"
@@ -24,10 +26,10 @@ import (
 	"golang.org/x/tools/internal/lsp/tests"
 	"golang.org/x/tools/internal/span"
 	"golang.org/x/tools/internal/testenv"
-	errors "golang.org/x/xerrors"
 )
 
 func TestMain(m *testing.M) {
+	bug.PanicOnBugs = true
 	testenv.ExitIfSmallMachine()
 	os.Exit(m.Run())
 }
@@ -47,16 +49,16 @@ type runner struct {
 func testSource(t *testing.T, datum *tests.Data) {
 	ctx := tests.Context(t)
 
-	cache := cache.New(nil)
+	cache := cache.New(nil, nil, nil)
 	session := cache.NewSession(ctx)
 	options := source.DefaultOptions().Clone()
 	tests.DefaultOptions(options)
 	options.SetEnvSlice(datum.Config.Env)
-	view, _, release, err := session.NewView(ctx, "source_test", span.URIFromPath(datum.Config.Dir), "", options)
-	release()
+	view, _, release, err := session.NewView(ctx, "source_test", span.URIFromPath(datum.Config.Dir), options)
 	if err != nil {
 		t.Fatal(err)
 	}
+	release()
 	defer view.Shutdown(ctx)
 
 	// Enable type error analyses for tests.
@@ -66,8 +68,7 @@ func testSource(t *testing.T, datum *tests.Data) {
 
 	var modifications []source.FileModification
 	for filename, content := range datum.Config.Overlay {
-		kind := source.DetectLanguage("", filename)
-		if kind != source.Go {
+		if filepath.Ext(filename) != ".go" {
 			continue
 		}
 		modifications = append(modifications, source.FileModification{
@@ -580,6 +581,8 @@ func (r *runner) Definition(t *testing.T, spn span.Span, d tests.Definition) {
 		expectHover := string(r.data.Golden(tag, d.Src.URI().Filename(), func() ([]byte, error) {
 			return []byte(hover), nil
 		}))
+		hover = tests.StripSubscripts(hover)
+		expectHover = tests.StripSubscripts(expectHover)
 		if hover != expectHover {
 			t.Errorf("hoverdef for %s failed:\n%s", d.Src, tests.Diff(t, expectHover, hover))
 		}
@@ -680,6 +683,10 @@ func (r *runner) Highlight(t *testing.T, src span.Span, locations []span.Span) {
 			t.Errorf("want %v, got %v\n", locations[i], results[i])
 		}
 	}
+}
+
+func (r *runner) InlayHints(t *testing.T, src span.Span) {
+	// TODO(golang/go#53315): add source test
 }
 
 func (r *runner) Hover(t *testing.T, src span.Span, text string) {
@@ -961,14 +968,12 @@ func (r *runner) SignatureHelp(t *testing.T, spn span.Span, want *protocol.Signa
 }
 
 // These are pure LSP features, no source level functionality to be tested.
-func (r *runner) Link(t *testing.T, uri span.URI, wantLinks []tests.Link) {}
-
-func (r *runner) SuggestedFix(t *testing.T, spn span.Span, actionKinds []string, expectedActions int) {
-}
-func (r *runner) FunctionExtraction(t *testing.T, start span.Span, end span.Span) {}
-func (r *runner) MethodExtraction(t *testing.T, start span.Span, end span.Span)   {}
-func (r *runner) CodeLens(t *testing.T, uri span.URI, want []protocol.CodeLens)   {}
-func (r *runner) AddImport(t *testing.T, uri span.URI, expectedImport string)     {}
+func (r *runner) Link(t *testing.T, uri span.URI, wantLinks []tests.Link)                          {}
+func (r *runner) SuggestedFix(t *testing.T, spn span.Span, actions []tests.SuggestedFix, want int) {}
+func (r *runner) FunctionExtraction(t *testing.T, start span.Span, end span.Span)                  {}
+func (r *runner) MethodExtraction(t *testing.T, start span.Span, end span.Span)                    {}
+func (r *runner) CodeLens(t *testing.T, uri span.URI, want []protocol.CodeLens)                    {}
+func (r *runner) AddImport(t *testing.T, uri span.URI, expectedImport string)                      {}
 
 func spanToRange(data *tests.Data, spn span.Span) (*protocol.ColumnMapper, protocol.Range, error) {
 	m, err := data.Mapper(spn.URI())

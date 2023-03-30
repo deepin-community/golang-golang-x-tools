@@ -35,6 +35,7 @@ still be able to independently override specific experimental features.
   * [Completion](#completion)
   * [Diagnostic](#diagnostic)
   * [Documentation](#documentation)
+  * [Inlayhint](#inlayhint)
   * [Navigation](#navigation)
 
 ### Build
@@ -72,6 +73,14 @@ Include only project_a, but not node_modules inside it: `-`, `+project_a`, `-pro
 
 Default: `["-node_modules"]`.
 
+#### **templateExtensions** *[]string*
+
+templateExtensions gives the extensions of file names that are treateed
+as template files. (The extension
+is the part of the file name after the final dot.)
+
+Default: `[]`.
+
 #### **memoryMode** *enum*
 
 **This setting is experimental and may be deleted.**
@@ -86,8 +95,8 @@ Must be one of:
 * `"DegradeClosed"`: In DegradeClosed mode, `gopls` will collect less information about
 packages without open files. As a result, features like Find
 References and Rename will miss results in such packages.
-
 * `"Normal"`
+
 Default: `"Normal"`.
 
 #### **expandWorkspaceToModule** *bool*
@@ -109,15 +118,6 @@ Default: `true`.
 
 experimentalWorkspaceModule opts a user into the experimental support
 for multi-module workspaces.
-
-Default: `false`.
-
-#### **experimentalTemplateSupport** *bool*
-
-**This setting is experimental and may be deleted.**
-
-experimentalTemplateSupport opts into the experimental support
-for template files.
 
 Default: `false`.
 
@@ -188,7 +188,7 @@ Default: `false`.
 
 codelenses overrides the enabled/disabled state of code lenses. See the
 "Code Lenses" section of the
-[Settings page](https://github.com/golang/tools/blob/master/gopls/doc/settings.md)
+[Settings page](https://github.com/golang/tools/blob/master/gopls/doc/settings.md#code-lenses)
 for the list of supported lenses.
 
 Example Usage:
@@ -248,13 +248,14 @@ Must be one of:
 * `"CaseInsensitive"`
 * `"CaseSensitive"`
 * `"Fuzzy"`
+
 Default: `"Fuzzy"`.
 
 ##### **experimentalPostfixCompletions** *bool*
 
 **This setting is experimental and may be deleted.**
 
-experimentalPostfixCompletions enables artifical method snippets
+experimentalPostfixCompletions enables artificial method snippets
 such as "someSlice.sort!".
 
 Default: `true`.
@@ -299,11 +300,8 @@ that should be reported by the gc_details command.
 Can contain any of:
 
 * `"bounds"` controls bounds checking diagnostics.
-
 * `"escape"` controls diagnostics about escape choices.
-
 * `"inline"` controls diagnostics about inlining choices.
-
 * `"nil"` controls nil checks.
 
 Default: `{"bounds":true,"escape":true,"inline":true,"nil":true}`.
@@ -351,8 +349,8 @@ Must be one of:
 This format separates the signature from the documentation, so that the client
 can do more manipulation of these fields.\
 This should only be used by clients that support this behavior.
-
 * `"SynopsisDocumentation"`
+
 Default: `"FullDocumentation"`.
 
 ##### **linkTarget** *string*
@@ -373,6 +371,18 @@ linksInHover toggles the presence of links to documentation in hover.
 
 Default: `true`.
 
+#### Inlayhint
+
+##### **hints** *map[string]bool*
+
+**This setting is experimental and may be deleted.**
+
+hints specify inlay hints that users want to see.
+A full list of hints that gopls uses can be found
+[here](https://github.com/golang/tools/blob/master/gopls/doc/inlayHints.md).
+
+Default: `{}`.
+
 #### Navigation
 
 ##### **importShortcut** *enum*
@@ -385,6 +395,7 @@ Must be one of:
 * `"Both"`
 * `"Definition"`
 * `"Link"`
+
 Default: `"Both"`.
 
 ##### **symbolMatcher** *enum*
@@ -399,7 +410,8 @@ Must be one of:
 * `"CaseSensitive"`
 * `"FastFuzzy"`
 * `"Fuzzy"`
-Default: `"Fuzzy"`.
+
+Default: `"FastFuzzy"`.
 
 ##### **symbolStyle** *enum*
 
@@ -423,10 +435,8 @@ Must be one of:
 match for the given symbol query. Here a "qualifier" is any "/" or "."
 delimited suffix of the fully qualified symbol. i.e. "to/pkg.Foo.Field" or
 just "Foo.Field".
-
 * `"Full"` is fully qualified symbols, i.e.
 "path/to/pkg.Foo.Field".
-
 * `"Package"` is package qualified symbols i.e.
 "pkg.Foo.Field".
 
@@ -441,6 +451,16 @@ verboseOutput enables additional debug logging.
 Default: `false`.
 
 <!-- END User: DO NOT MANUALLY EDIT THIS SECTION -->
+
+#### **newDiff** *string*
+
+newDiff enables the new diff implementation. If this is "both",
+for now both diffs will be run and statistics will be generateted in
+a file in $TMPDIR. This is a risky setting; help in trying it
+is appreciated. If it is "old" the old implementation is used,
+and if it is "new", just the new implementation is used.
+
+Default: 'old'.
 
 ## Code Lenses
 

@@ -1,3 +1,69 @@
+golang-golang-x-tools (1:0.1.12+ds-1) unstable; urgency=medium
+
+  * Team upload
+  * New upstream release 0.1.12
+  * Bump golang-golang-x-vuln-dev to 0.0~git20220725.4151a5a
+
+ -- Shengjing Zhu <zhsj@debian.org>  Wed, 03 Aug 2022 04:17:12 +0800
+
+golang-golang-x-tools (1:0.1.11+ds-2) unstable; urgency=medium
+
+  * Team upload
+  * Add golang-golang-x-vuln-dev to Build-Depends
+
+ -- Shengjing Zhu <zhsj@debian.org>  Sat, 25 Jun 2022 20:30:38 +0800
+
+golang-golang-x-tools (1:0.1.11+ds-1) unstable; urgency=medium
+
+  * Team upload
+  * New upstream release
+  * Update Standards-Version to 4.6.1 (no changes)
+  * Drop dependency golang-golang-x-xerrors-dev
+  * Disable vulncheck in gopls
+    golang.org/x/vuln is not packaged yet
+
+ -- Shengjing Zhu <zhsj@debian.org>  Sat, 18 Jun 2022 16:29:07 +0800
+
+golang-golang-x-tools (1:0.1.10+ds-1) unstable; urgency=medium
+
+  * Team upload.
+
+  [ Tianon Gravi ]
+  * Remove self from Uploaders
+
+  [ Shengjing Zhu ]
+  * New upstream release (Closes: #1007800)
+  * Fix Multi-Arch hint
+  * Fix Martina name and email address
+  * Update exclude packages for new version
+  * Bump golang-golang-x-mod-dev to 0.5.1-2
+  * Bump golang-mvdan-gofumpt-dev to 0.3.0
+  * Install extra testdata for lsp help test
+
+ -- Shengjing Zhu <zhsj@debian.org>  Wed, 23 Mar 2022 01:26:33 +0800
+
+golang-golang-x-tools (1:0.1.9+ds-2) unstable; urgency=medium
+
+  * Team upload.
+  * Add Multi-Arch hint
+  * Refresh lintian overrides
+
+ -- Shengjing Zhu <zhsj@debian.org>  Wed, 23 Feb 2022 23:11:16 +0800
+
+golang-golang-x-tools (1:0.1.9+ds-1) unstable; urgency=medium
+
+  * Team upload
+  * New upstream release
+
+ -- Shengjing Zhu <zhsj@debian.org>  Sat, 05 Feb 2022 23:53:11 +0800
+
+golang-golang-x-tools (1:0.1.8+ds-1) unstable; urgency=medium
+
+  * Team upload
+  * New upstream release
+
+ -- Shengjing Zhu <zhsj@debian.org>  Fri, 24 Dec 2021 03:14:00 +0800
+
 golang-golang-x-tools (1:0.1.7+ds-2) unstable; urgency=medium
 
   * Team upload.

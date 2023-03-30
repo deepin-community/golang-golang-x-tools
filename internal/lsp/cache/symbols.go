@@ -7,70 +7,105 @@ package cache
 import (
 	"context"
 	"go/ast"
+	"go/parser"
 	"go/token"
 	"go/types"
 	"strings"
 
+	"golang.org/x/tools/internal/lsp/lsppos"
 	"golang.org/x/tools/internal/lsp/protocol"
 	"golang.org/x/tools/internal/lsp/source"
 	"golang.org/x/tools/internal/memoize"
-	"golang.org/x/tools/internal/span"
 )
 
-type symbolHandle struct {
-	handle *memoize.Handle
+// symbolize returns the result of symbolizing the file identified by fh, using a cache.
+func (s *snapshot) symbolize(ctx context.Context, fh source.FileHandle) ([]source.Symbol, error) {
+	uri := fh.URI()
 
-	fh source.FileHandle
+	s.mu.Lock()
+	entry, hit := s.symbolizeHandles.Get(uri)
+	s.mu.Unlock()
 
-	// key is the hashed key for the package.
-	key symbolHandleKey
+	type symbolizeResult struct {
+		symbols []source.Symbol
+		err     error
+	}
+
+	// Cache miss?
+	if !hit {
+		type symbolHandleKey source.Hash
+		key := symbolHandleKey(fh.FileIdentity().Hash)
+		promise, release := s.store.Promise(key, func(_ context.Context, arg interface{}) interface{} {
+			symbols, err := symbolizeImpl(arg.(*snapshot), fh)
+			return symbolizeResult{symbols, err}
+		})
+
+		entry = promise
+
+		s.mu.Lock()
+		s.symbolizeHandles.Set(uri, entry, func(_, _ interface{}) { release() })
+		s.mu.Unlock()
+	}
+
+	// Await result.
+	v, err := s.awaitPromise(ctx, entry.(*memoize.Promise))
+	if err != nil {
+		return nil, err
+	}
+	res := v.(symbolizeResult)
+	return res.symbols, res.err
 }
 
-// symbolData contains the data produced by extracting symbols from a file.
-type symbolData struct {
-	symbols []source.Symbol
-	err     error
-}
-
-type symbolHandleKey string
-
-func (s *snapshot) buildSymbolHandle(ctx context.Context, fh source.FileHandle) *symbolHandle {
-	if h := s.getSymbolHandle(fh.URI()); h != nil {
-		return h
+// symbolizeImpl reads and parses a file and extracts symbols from it.
+// It may use a parsed file already present in the cache but
+// otherwise does not populate the cache.
+func symbolizeImpl(snapshot *snapshot, fh source.FileHandle) ([]source.Symbol, error) {
+	src, err := fh.Read()
+	if err != nil {
+		return nil, err
 	}
-	key := symbolHandleKey(fh.FileIdentity().Hash)
-	h := s.generation.Bind(key, func(ctx context.Context, arg memoize.Arg) interface{} {
-		snapshot := arg.(*snapshot)
-		data := &symbolData{}
-		data.symbols, data.err = symbolize(ctx, snapshot, fh)
-		return data
-	}, nil)
 
-	sh := &symbolHandle{
-		handle: h,
-		fh:     fh,
-		key:    key,
-	}
-	return s.addSymbolHandle(sh)
-}
+	var (
+		file     *ast.File
+		fileDesc *token.File
+	)
 
-// symbolize extracts symbols from a file. It does not parse the file through the cache.
-func symbolize(ctx context.Context, snapshot *snapshot, fh source.FileHandle) ([]source.Symbol, error) {
-	var w symbolWalker
-	fset := token.NewFileSet() // don't use snapshot.FileSet, as that would needlessly leak memory.
-	data := parseGo(ctx, fset, fh, source.ParseFull)
-	if data.parsed != nil && data.parsed.File != nil {
-		w.curFile = data.parsed
-		w.curURI = protocol.URIFromSpanURI(data.parsed.URI)
-		w.fileDecls(data.parsed.File.Decls)
+	// If the file has already been fully parsed through the
+	// cache, we can just use the result. But we don't want to
+	// populate the cache after a miss.
+	snapshot.mu.Lock()
+	pgf, _ := snapshot.peekParseGoLocked(fh, source.ParseFull)
+	snapshot.mu.Unlock()
+	if pgf != nil {
+		file = pgf.File
+		fileDesc = pgf.Tok
 	}
+
+	// Otherwise, we parse the file ourselves. Notably we don't use parseGo here,
+	// so that we can avoid parsing comments and can skip object resolution,
+	// which has a meaningful impact on performance. Neither comments nor objects
+	// are necessary for symbol construction.
+	if file == nil {
+		fset := token.NewFileSet()
+		file, err = parser.ParseFile(fset, fh.URI().Filename(), src, skipObjectResolution)
+		if file == nil {
+			return nil, err
+		}
+		fileDesc = fset.File(file.Package)
+	}
+
+	w := &symbolWalker{
+		mapper: lsppos.NewTokenMapper(src, fileDesc),
+	}
+
+	w.fileDecls(file.Decls)
+
 	return w.symbols, w.firstError
 }
 
 type symbolWalker struct {
-	curFile    *source.ParsedGoFile
-	pkgName    string
-	curURI     protocol.DocumentURI
+	mapper *lsppos.TokenMapper // for computing positions
+
 	symbols    []source.Symbol
 	firstError error
 }
@@ -85,7 +120,7 @@ func (w *symbolWalker) atNode(node ast.Node, name string, kind protocol.SymbolKi
 	}
 	b.WriteString(name)
 
-	rng, err := fileRange(w.curFile, node.Pos(), node.End())
+	rng, err := w.mapper.Range(node.Pos(), node.End())
 	if err != nil {
 		w.error(err)
 		return
@@ -102,14 +137,6 @@ func (w *symbolWalker) error(err error) {
 	if err != nil && w.firstError == nil {
 		w.firstError = err
 	}
-}
-
-func fileRange(pgf *source.ParsedGoFile, start, end token.Pos) (protocol.Range, error) {
-	s, err := span.FileSpan(pgf.Tok, pgf.Mapper.Converter, start, end)
-	if err != nil {
-		return protocol.Range{}, nil
-	}
-	return pgf.Mapper.Range(s)
 }
 
 func (w *symbolWalker) fileDecls(decls []ast.Decl) {

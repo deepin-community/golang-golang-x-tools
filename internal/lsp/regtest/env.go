@@ -14,6 +14,7 @@ import (
 	"golang.org/x/tools/internal/jsonrpc2/servertest"
 	"golang.org/x/tools/internal/lsp/fake"
 	"golang.org/x/tools/internal/lsp/protocol"
+	"golang.org/x/tools/internal/xcontext"
 )
 
 // Env holds an initialized fake Editor, Workspace, and Server, which may be
@@ -109,9 +110,18 @@ type condition struct {
 
 // NewEnv creates a new test environment using the given scratch environment
 // and gopls server.
-func NewEnv(ctx context.Context, tb testing.TB, sandbox *fake.Sandbox, ts servertest.Connector, editorConfig fake.EditorConfig, withHooks bool) *Env {
+//
+// The resulting cleanup func must be called to close the jsonrpc2 connection.
+//
+// TODO(rfindley): this function provides questionable value. Consider
+// refactoring to move things like creating the server outside of this
+// constructor.
+func NewEnv(ctx context.Context, tb testing.TB, sandbox *fake.Sandbox, ts servertest.Connector, editorConfig fake.EditorConfig, withHooks bool) (_ *Env, cleanup func()) {
 	tb.Helper()
-	conn := ts.Connect(ctx)
+
+	bgCtx, cleanupConn := context.WithCancel(xcontext.Detach(ctx))
+	conn := ts.Connect(bgCtx)
+
 	env := &Env{
 		T:       tb,
 		Ctx:     ctx,
@@ -138,12 +148,12 @@ func NewEnv(ctx context.Context, tb testing.TB, sandbox *fake.Sandbox, ts server
 			OnUnregistration:         env.onUnregistration,
 		}
 	}
-	editor, err := fake.NewEditor(sandbox, editorConfig).Connect(ctx, conn, hooks)
+	editor, err := fake.NewEditor(sandbox, editorConfig).Connect(bgCtx, conn, hooks)
 	if err != nil {
 		tb.Fatal(err)
 	}
 	env.Editor = editor
-	return env
+	return env, cleanupConn
 }
 
 func (e *Env) onDiagnostics(_ context.Context, d *protocol.PublishDiagnosticsParams) error {
@@ -258,7 +268,7 @@ func checkExpectations(s State, expectations []Expectation) (Verdict, string) {
 		if v > finalVerdict {
 			finalVerdict = v
 		}
-		summary.WriteString(fmt.Sprintf("\t%v: %s\n", v, e.Description()))
+		summary.WriteString(fmt.Sprintf("%v: %s\n", v, e.Description()))
 	}
 	return finalVerdict, summary.String()
 }

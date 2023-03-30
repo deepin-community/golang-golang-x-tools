@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path"
 	"path/filepath"
@@ -16,18 +17,18 @@ import (
 
 	"golang.org/x/tools/internal/event"
 	"golang.org/x/tools/internal/jsonrpc2"
+	"golang.org/x/tools/internal/lsp/bug"
 	"golang.org/x/tools/internal/lsp/debug"
 	"golang.org/x/tools/internal/lsp/protocol"
 	"golang.org/x/tools/internal/lsp/source"
 	"golang.org/x/tools/internal/span"
-	errors "golang.org/x/xerrors"
 )
 
 func (s *Server) initialize(ctx context.Context, params *protocol.ParamInitialize) (*protocol.InitializeResult, error) {
 	s.stateMu.Lock()
 	if s.state >= serverInitializing {
 		defer s.stateMu.Unlock()
-		return nil, errors.Errorf("%w: initialize called while server in %v state", jsonrpc2.ErrInvalidRequest, s.state)
+		return nil, fmt.Errorf("%w: initialize called while server in %v state", jsonrpc2.ErrInvalidRequest, s.state)
 	}
 	s.state = serverInitializing
 	s.stateMu.Unlock()
@@ -55,6 +56,21 @@ func (s *Server) initialize(ctx context.Context, params *protocol.ParamInitializ
 		return nil, err
 	}
 	options.ForClientCapabilities(params.Capabilities)
+
+	if options.ShowBugReports {
+		// Report the next bug that occurs on the server.
+		bugCh := bug.Notify()
+		go func() {
+			b := <-bugCh
+			msg := &protocol.ShowMessageParams{
+				Type:    protocol.Error,
+				Message: fmt.Sprintf("A bug occurred on the server: %s\nLocation:%s", b.Description, b.Key),
+			}
+			if err := s.eventuallyShowMessage(context.Background(), msg); err != nil {
+				log.Printf("error showing bug: %v", err)
+			}
+		}()
+	}
 
 	folders := params.WorkspaceFolders
 	if len(folders) == 0 {
@@ -103,7 +119,7 @@ func (s *Server) initialize(ctx context.Context, params *protocol.ParamInitializ
 		if dep.Path == "github.com/sergi/go-diff" && dep.Version == "v1.2.0" {
 			if err := s.eventuallyShowMessage(ctx, &protocol.ShowMessageParams{
 				Message: `It looks like you have a bad gopls installation.
-Please reinstall gopls by running 'GO111MODULE=on go get golang.org/x/tools/gopls@latest'.
+Please reinstall gopls by running 'GO111MODULE=on go install golang.org/x/tools/gopls@latest'.
 See https://github.com/golang/go/issues/45732 for more information.`,
 				Type: protocol.Error,
 			}); err != nil {
@@ -137,6 +153,7 @@ See https://github.com/golang/go/issues/45732 for more information.`,
 			HoverProvider:             true,
 			DocumentHighlightProvider: true,
 			DocumentLinkProvider:      protocol.DocumentLinkOptions{},
+			InlayHintProvider:         protocol.InlayHintOptions{},
 			ReferencesProvider:        true,
 			RenameProvider:            renameOpts,
 			SignatureHelpProvider: protocol.SignatureHelpOptions{
@@ -149,8 +166,8 @@ See https://github.com/golang/go/issues/45732 for more information.`,
 					IncludeText: false,
 				},
 			},
-			Workspace: protocol.Workspace5Gn{
-				WorkspaceFolders: protocol.WorkspaceFolders4Gn{
+			Workspace: protocol.Workspace6Gn{
+				WorkspaceFolders: protocol.WorkspaceFolders5Gn{
 					Supported:           true,
 					ChangeNotifications: "workspace/didChangeWorkspaceFolders",
 				},
@@ -170,7 +187,7 @@ func (s *Server) initialized(ctx context.Context, params *protocol.InitializedPa
 	s.stateMu.Lock()
 	if s.state >= serverInitialized {
 		defer s.stateMu.Unlock()
-		return errors.Errorf("%w: initialized called while server in %v state", jsonrpc2.ErrInvalidRequest, s.state)
+		return fmt.Errorf("%w: initialized called while server in %v state", jsonrpc2.ErrInvalidRequest, s.state)
 	}
 	s.state = serverInitialized
 	s.stateMu.Unlock()
@@ -188,20 +205,17 @@ func (s *Server) initialized(ctx context.Context, params *protocol.InitializedPa
 	}
 	s.pendingFolders = nil
 
+	var registrations []protocol.Registration
 	if options.ConfigurationSupported && options.DynamicConfigurationSupported {
-		registrations := []protocol.Registration{
-			{
-				ID:     "workspace/didChangeConfiguration",
-				Method: "workspace/didChangeConfiguration",
-			},
-			{
-				ID:     "workspace/didChangeWorkspaceFolders",
-				Method: "workspace/didChangeWorkspaceFolders",
-			},
-		}
-		if options.SemanticTokens {
-			registrations = append(registrations, semanticTokenRegistration(options.SemanticTypes, options.SemanticMods))
-		}
+		registrations = append(registrations, protocol.Registration{
+			ID:     "workspace/didChangeConfiguration",
+			Method: "workspace/didChangeConfiguration",
+		})
+	}
+	if options.SemanticTokens && options.DynamicRegistrationSemanticTokensSupported {
+		registrations = append(registrations, semanticTokenRegistration(options.SemanticTypes, options.SemanticMods))
+	}
+	if len(registrations) > 0 {
 		if err := s.client.RegisterCapability(ctx, &protocol.RegistrationParams{
 			Registrations: registrations,
 		}); err != nil {
@@ -221,7 +235,7 @@ func (s *Server) addFolders(ctx context.Context, folders []protocol.WorkspaceFol
 		defer func() {
 			go func() {
 				wg.Wait()
-				work.End("Done.")
+				work.End(ctx, "Done.")
 			}()
 		}()
 	}
@@ -236,24 +250,32 @@ func (s *Server) addFolders(ctx context.Context, folders []protocol.WorkspaceFol
 		work := s.progress.Start(ctx, "Setting up workspace", "Loading packages...", nil, nil)
 		snapshot, release, err := s.addView(ctx, folder.Name, uri)
 		if err != nil {
+			if err == source.ErrViewExists {
+				continue
+			}
 			viewErrors[uri] = err
-			work.End(fmt.Sprintf("Error loading packages: %s", err))
+			work.End(ctx, fmt.Sprintf("Error loading packages: %s", err))
 			continue
 		}
+		// Inv: release() must be called once.
+
 		var swg sync.WaitGroup
 		swg.Add(1)
 		allFoldersWg.Add(1)
+		// TODO(adonovan): this looks fishy. Is AwaitInitialized
+		// supposed to be called once per folder?
 		go func() {
 			defer swg.Done()
 			defer allFoldersWg.Done()
 			snapshot.AwaitInitialized(ctx)
-			work.End("Finished loading packages.")
+			work.End(ctx, "Finished loading packages.")
 		}()
 
 		// Print each view's environment.
 		buf := &bytes.Buffer{}
 		if err := snapshot.WriteEnv(ctx, buf); err != nil {
 			viewErrors[uri] = err
+			release()
 			continue
 		}
 		event.Log(ctx, buf.String())
@@ -412,33 +434,23 @@ func (s *Server) eventuallyShowMessage(ctx context.Context, msg *protocol.ShowMe
 
 func (s *Server) handleOptionResults(ctx context.Context, results source.OptionResults) error {
 	for _, result := range results {
-		if result.Error != nil {
-			msg := &protocol.ShowMessageParams{
+		var msg *protocol.ShowMessageParams
+		switch result.Error.(type) {
+		case nil:
+			// nothing to do
+		case *source.SoftError:
+			msg = &protocol.ShowMessageParams{
+				Type:    protocol.Warning,
+				Message: result.Error.Error(),
+			}
+		default:
+			msg = &protocol.ShowMessageParams{
 				Type:    protocol.Error,
 				Message: result.Error.Error(),
 			}
-			if err := s.eventuallyShowMessage(ctx, msg); err != nil {
-				return err
-			}
 		}
-		switch result.State {
-		case source.OptionUnexpected:
-			msg := &protocol.ShowMessageParams{
-				Type:    protocol.Error,
-				Message: fmt.Sprintf("unexpected gopls setting %q", result.Name),
-			}
+		if msg != nil {
 			if err := s.eventuallyShowMessage(ctx, msg); err != nil {
-				return err
-			}
-		case source.OptionDeprecated:
-			msg := fmt.Sprintf("gopls setting %q is deprecated", result.Name)
-			if result.Replacement != "" {
-				msg = fmt.Sprintf("%s, use %q instead", msg, result.Replacement)
-			}
-			if err := s.eventuallyShowMessage(ctx, &protocol.ShowMessageParams{
-				Type:    protocol.Warning,
-				Message: msg,
-			}); err != nil {
 				return err
 			}
 		}
@@ -450,6 +462,7 @@ func (s *Server) handleOptionResults(ctx context.Context, results source.OptionR
 // it to a snapshot.
 // We don't want to return errors for benign conditions like wrong file type,
 // so callers should do if !ok { return err } rather than if err != nil.
+// The returned cleanup function is non-nil even in case of false/error result.
 func (s *Server) beginFileRequest(ctx context.Context, pURI protocol.DocumentURI, expectKind source.FileKind) (source.Snapshot, source.VersionedFileHandle, bool, func(), error) {
 	uri := pURI.SpanURI()
 	if !uri.IsFile() {
@@ -466,7 +479,7 @@ func (s *Server) beginFileRequest(ctx context.Context, pURI protocol.DocumentURI
 		release()
 		return nil, nil, false, func() {}, err
 	}
-	if expectKind != source.UnknownKind && fh.Kind() != expectKind {
+	if expectKind != source.UnknownKind && view.FileKind(fh) != expectKind {
 		// Wrong kind of file. Nothing to do.
 		release()
 		return nil, nil, false, func() {}, nil
@@ -474,6 +487,8 @@ func (s *Server) beginFileRequest(ctx context.Context, pURI protocol.DocumentURI
 	return snapshot, fh, true, release, nil
 }
 
+// shutdown implements the 'shutdown' LSP handler. It releases resources
+// associated with the server and waits for all ongoing work to complete.
 func (s *Server) shutdown(ctx context.Context) error {
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()

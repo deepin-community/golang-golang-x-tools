@@ -8,15 +8,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"go/token"
 	"strings"
 
 	"golang.org/x/mod/modfile"
 	"golang.org/x/tools/internal/event"
 	"golang.org/x/tools/internal/lsp/protocol"
 	"golang.org/x/tools/internal/lsp/source"
-	"golang.org/x/tools/internal/span"
-	errors "golang.org/x/xerrors"
 )
 
 func Hover(ctx context.Context, snapshot source.Snapshot, fh source.FileHandle, position protocol.Position) (*protocol.Hover, error) {
@@ -39,15 +36,11 @@ func Hover(ctx context.Context, snapshot source.Snapshot, fh source.FileHandle, 
 	// Get the position of the cursor.
 	pm, err := snapshot.ParseMod(ctx, fh)
 	if err != nil {
-		return nil, errors.Errorf("getting modfile handle: %w", err)
+		return nil, fmt.Errorf("getting modfile handle: %w", err)
 	}
-	spn, err := pm.Mapper.PointSpan(position)
+	offset, err := pm.Mapper.Offset(position)
 	if err != nil {
-		return nil, errors.Errorf("computing cursor position: %w", err)
-	}
-	hoverRng, err := spn.Range(pm.Mapper.Converter)
-	if err != nil {
-		return nil, errors.Errorf("computing hover range: %w", err)
+		return nil, fmt.Errorf("computing cursor position: %w", err)
 	}
 
 	// Confirm that the cursor is at the position of a require statement.
@@ -63,7 +56,7 @@ func Hover(ctx context.Context, snapshot source.Snapshot, fh source.FileHandle, 
 		// Shift the start position to the location of the
 		// dependency within the require statement.
 		startPos, endPos = s+i, s+i+len(dep)
-		if token.Pos(startPos) <= hoverRng.Start && hoverRng.Start <= token.Pos(endPos) {
+		if startPos <= offset && offset <= endPos {
 			req = r
 			break
 		}
@@ -85,20 +78,10 @@ func Hover(ctx context.Context, snapshot source.Snapshot, fh source.FileHandle, 
 	}
 
 	// Get the range to highlight for the hover.
-	line, col, err := pm.Mapper.Converter.ToPosition(startPos)
+	rng, err := source.ByteOffsetsToRange(pm.Mapper, fh.URI(), startPos, endPos)
 	if err != nil {
 		return nil, err
 	}
-	start := span.NewPoint(line, col, startPos)
-
-	line, col, err = pm.Mapper.Converter.ToPosition(endPos)
-	if err != nil {
-		return nil, err
-	}
-	end := span.NewPoint(line, col, endPos)
-
-	spn = span.New(fh.URI(), start, end)
-	rng, err := pm.Mapper.Range(spn)
 	if err != nil {
 		return nil, err
 	}

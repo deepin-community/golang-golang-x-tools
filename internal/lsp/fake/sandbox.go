@@ -6,16 +6,18 @@ package fake
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/ioutil"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"golang.org/x/tools/internal/gocommand"
 	"golang.org/x/tools/internal/testenv"
 	"golang.org/x/tools/txtar"
-	errors "golang.org/x/xerrors"
 )
 
 // Sandbox holds a collection of temporary resources to use for working with Go
@@ -147,7 +149,7 @@ func Tempdir(files map[string][]byte) (string, error) {
 	}
 	for name, data := range files {
 		if err := WriteFileData(name, data, RelativeTo(dir)); err != nil {
-			return "", errors.Errorf("writing to tempdir: %w", err)
+			return "", fmt.Errorf("writing to tempdir: %w", err)
 		}
 	}
 	return dir, nil
@@ -178,7 +180,8 @@ func validateConfig(config SandboxConfig) error {
 // splitModuleVersionPath extracts module information from files stored in the
 // directory structure modulePath@version/suffix.
 // For example:
-//  splitModuleVersionPath("mod.com@v1.2.3/package") = ("mod.com", "v1.2.3", "package")
+//
+//	splitModuleVersionPath("mod.com@v1.2.3/package") = ("mod.com", "v1.2.3", "package")
 func splitModuleVersionPath(path string) (modulePath, version, suffix string) {
 	parts := strings.Split(path, "/")
 	var modulePathParts []string
@@ -244,7 +247,7 @@ func (sb *Sandbox) RunGoCommand(ctx context.Context, dir, verb string, args []st
 	gocmdRunner := &gocommand.Runner{}
 	stdout, stderr, _, err := gocmdRunner.RunRaw(ctx, inv)
 	if err != nil {
-		return errors.Errorf("go command failed (stdout: %s) (stderr: %s): %v", stdout.String(), stderr.String(), err)
+		return fmt.Errorf("go command failed (stdout: %s) (stderr: %s): %v", stdout.String(), stderr.String(), err)
 	}
 	// Since running a go command may result in changes to workspace files,
 	// check if we need to send any any "watched" file events.
@@ -253,7 +256,7 @@ func (sb *Sandbox) RunGoCommand(ctx context.Context, dir, verb string, args []st
 	//                 for benchmarks. Consider refactoring.
 	if sb.Workdir != nil && checkForFileChanges {
 		if err := sb.Workdir.CheckForFileChanges(ctx); err != nil {
-			return errors.Errorf("checking for file changes: %w", err)
+			return fmt.Errorf("checking for file changes: %w", err)
 		}
 	}
 	return nil
@@ -265,9 +268,36 @@ func (sb *Sandbox) Close() error {
 	if sb.gopath != "" {
 		goCleanErr = sb.RunGoCommand(context.Background(), "", "clean", []string{"-modcache"}, false)
 	}
-	err := os.RemoveAll(sb.rootdir)
+	err := removeAll(sb.rootdir)
 	if err != nil || goCleanErr != nil {
 		return fmt.Errorf("error(s) cleaning sandbox: cleaning modcache: %v; removing files: %v", goCleanErr, err)
 	}
 	return nil
+}
+
+// removeAll is copied from GOROOT/src/testing/testing.go
+//
+// removeAll is like os.RemoveAll, but retries Windows "Access is denied."
+// errors up to an arbitrary timeout.
+//
+// See https://go.dev/issue/50051 for additional context.
+func removeAll(path string) error {
+	const arbitraryTimeout = 2 * time.Second
+	var (
+		start     time.Time
+		nextSleep = 1 * time.Millisecond
+	)
+	for {
+		err := os.RemoveAll(path)
+		if !isWindowsRetryable(err) {
+			return err
+		}
+		if start.IsZero() {
+			start = time.Now()
+		} else if d := time.Since(start) + nextSleep; d >= arbitraryTimeout {
+			return err
+		}
+		time.Sleep(nextSleep)
+		nextSleep += time.Duration(rand.Int63n(int64(nextSleep)))
+	}
 }

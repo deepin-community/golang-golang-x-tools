@@ -6,6 +6,7 @@ package source
 
 import (
 	"context"
+	"fmt"
 	"go/ast"
 	"go/token"
 	"go/types"
@@ -13,36 +14,31 @@ import (
 	"golang.org/x/tools/go/ast/astutil"
 	"golang.org/x/tools/internal/event"
 	"golang.org/x/tools/internal/lsp/protocol"
-	errors "golang.org/x/xerrors"
 )
 
-func SignatureHelp(ctx context.Context, snapshot Snapshot, fh FileHandle, pos protocol.Position) (*protocol.SignatureInformation, int, error) {
+func SignatureHelp(ctx context.Context, snapshot Snapshot, fh FileHandle, position protocol.Position) (*protocol.SignatureInformation, int, error) {
 	ctx, done := event.Start(ctx, "source.SignatureHelp")
 	defer done()
 
 	pkg, pgf, err := GetParsedFile(ctx, snapshot, fh, NarrowestPackage)
 	if err != nil {
-		return nil, 0, errors.Errorf("getting file for SignatureHelp: %w", err)
+		return nil, 0, fmt.Errorf("getting file for SignatureHelp: %w", err)
 	}
-	spn, err := pgf.Mapper.PointSpan(pos)
-	if err != nil {
-		return nil, 0, err
-	}
-	rng, err := spn.Range(pgf.Mapper.Converter)
+	pos, err := pgf.Mapper.Pos(position)
 	if err != nil {
 		return nil, 0, err
 	}
 	// Find a call expression surrounding the query position.
 	var callExpr *ast.CallExpr
-	path, _ := astutil.PathEnclosingInterval(pgf.File, rng.Start, rng.Start)
+	path, _ := astutil.PathEnclosingInterval(pgf.File, pos, pos)
 	if path == nil {
-		return nil, 0, errors.Errorf("cannot find node enclosing position")
+		return nil, 0, fmt.Errorf("cannot find node enclosing position")
 	}
 FindCall:
 	for _, node := range path {
 		switch node := node.(type) {
 		case *ast.CallExpr:
-			if rng.Start >= node.Lparen && rng.Start <= node.Rparen {
+			if pos >= node.Lparen && pos <= node.Rparen {
 				callExpr = node
 				break FindCall
 			}
@@ -50,16 +46,16 @@ FindCall:
 			// The user is within an anonymous function,
 			// which may be the parameter to the *ast.CallExpr.
 			// Don't show signature help in this case.
-			return nil, 0, errors.Errorf("no signature help within a function declaration")
+			return nil, 0, fmt.Errorf("no signature help within a function declaration")
 		case *ast.BasicLit:
 			if node.Kind == token.STRING {
-				return nil, 0, errors.Errorf("no signature help within a string literal")
+				return nil, 0, fmt.Errorf("no signature help within a string literal")
 			}
 		}
 
 	}
 	if callExpr == nil || callExpr.Fun == nil {
-		return nil, 0, errors.Errorf("cannot find an enclosing function")
+		return nil, 0, fmt.Errorf("cannot find an enclosing function")
 	}
 
 	qf := Qualifier(pgf.File, pkg.GetTypes(), pkg.GetTypesInfo())
@@ -77,21 +73,21 @@ FindCall:
 
 	// Handle builtin functions separately.
 	if obj, ok := obj.(*types.Builtin); ok {
-		return builtinSignature(ctx, snapshot, callExpr, obj.Name(), rng.Start)
+		return builtinSignature(ctx, snapshot, callExpr, obj.Name(), pos)
 	}
 
 	// Get the type information for the function being called.
 	sigType := pkg.GetTypesInfo().TypeOf(callExpr.Fun)
 	if sigType == nil {
-		return nil, 0, errors.Errorf("cannot get type for Fun %[1]T (%[1]v)", callExpr.Fun)
+		return nil, 0, fmt.Errorf("cannot get type for Fun %[1]T (%[1]v)", callExpr.Fun)
 	}
 
 	sig, _ := sigType.Underlying().(*types.Signature)
 	if sig == nil {
-		return nil, 0, errors.Errorf("cannot find signature for Fun %[1]T (%[1]v)", callExpr.Fun)
+		return nil, 0, fmt.Errorf("cannot find signature for Fun %[1]T (%[1]v)", callExpr.Fun)
 	}
 
-	activeParam := activeParameter(callExpr, sig.Params().Len(), sig.Variadic(), rng.Start)
+	activeParam := activeParameter(callExpr, sig.Params().Len(), sig.Variadic(), pos)
 
 	var (
 		name    string
@@ -102,25 +98,13 @@ FindCall:
 		if err != nil {
 			return nil, 0, err
 		}
-		node, err := snapshot.PosToDecl(ctx, declPkg, obj.Pos())
-		if err != nil {
-			return nil, 0, err
-		}
-		rng, err := objToMappedRange(snapshot, pkg, obj)
-		if err != nil {
-			return nil, 0, err
-		}
-		decl := Declaration{
-			obj:  obj,
-			node: node,
-		}
-		decl.MappedRange = append(decl.MappedRange, rng)
-		d, err := HoverInfo(ctx, snapshot, pkg, decl.obj, decl.node, nil)
+		node, _ := FindDeclAndField(declPkg.GetSyntax(), obj.Pos()) // may be nil
+		d, err := FindHoverContext(ctx, snapshot, pkg, obj, node, nil)
 		if err != nil {
 			return nil, 0, err
 		}
 		name = obj.Name()
-		comment = d.comment
+		comment = d.Comment
 	} else {
 		name = "func"
 	}

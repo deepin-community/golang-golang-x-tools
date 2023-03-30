@@ -83,14 +83,14 @@ func TestSearchForEnclosing(t *testing.T) {
 			if _, err = (*types.Config)(nil).Check("p", fset, []*ast.File{file}, info); err != nil {
 				t.Fatal(err)
 			}
-			typ := searchForEnclosing(info, path)
-			if typ == nil {
+			obj := searchForEnclosing(info, path)
+			if obj == nil {
 				if test.wantTypeName != "" {
 					t.Errorf("searchForEnclosing(...) = <nil>, want %q", test.wantTypeName)
 				}
 				return
 			}
-			if got := typ.(*types.Named).Obj().Name(); got != test.wantTypeName {
+			if got := obj.Name(); got != test.wantTypeName {
 				t.Errorf("searchForEnclosing(...) = %q, want %q", got, test.wantTypeName)
 			}
 		})
@@ -101,9 +101,9 @@ func TestSearchForEnclosing(t *testing.T) {
 // coordinates in the file fname of fset.
 func posAt(line, column int, fset *token.FileSet, fname string) token.Pos {
 	var tok *token.File
-	fset.Iterate(func(f *token.File) bool {
-		if f.Name() == fname {
-			tok = f
+	fset.Iterate(func(tf *token.File) bool {
+		if tf.Name() == fname {
+			tok = tf
 			return false
 		}
 		return true

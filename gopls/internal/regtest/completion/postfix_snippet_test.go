@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	. "golang.org/x/tools/internal/lsp/regtest"
-	"golang.org/x/tools/internal/lsp/source"
 )
 
 func TestPostfixSnippetCompletion(t *testing.T) {
@@ -266,6 +265,27 @@ for k := range foo {
 `,
 		},
 		{
+			name: "channel_range",
+			before: `
+package foo
+
+func _() {
+	foo := make(chan int)
+	foo.range
+}
+`,
+			after: `
+package foo
+
+func _() {
+	foo := make(chan int)
+	for e := range foo {
+	$0
+}
+}
+`,
+		},
+		{
 			name: "var",
 			before: `
 package foo
@@ -372,11 +392,51 @@ func _() {
 }
 `,
 		},
+		{
+			name: "string split",
+			before: `
+package foo
+
+func foo() []string {
+	x := "test"
+	return x.split
+}`,
+			after: `
+package foo
+
+import "strings"
+
+func foo() []string {
+	x := "test"
+	return strings.Split(x, "$0")
+}`,
+		},
+		{
+			name: "string slice join",
+			before: `
+package foo
+
+func foo() string {
+	x := []string{"a", "test"}
+	return x.join
+}`,
+			after: `
+package foo
+
+import "strings"
+
+func foo() string {
+	x := []string{"a", "test"}
+	return strings.Join(x, "$0")
+}`,
+		},
 	}
 
-	r := WithOptions(Options(func(o *source.Options) {
-		o.ExperimentalPostfixCompletions = true
-	}))
+	r := WithOptions(
+		Settings{
+			"experimentalPostfixCompletions": true,
+		},
+	)
 	r.Run(t, mod, func(t *testing.T, env *Env) {
 		for _, c := range cases {
 			t.Run(c.name, func(t *testing.T) {

@@ -15,10 +15,9 @@ import (
 	"golang.org/x/tools/go/ast/astutil"
 	"golang.org/x/tools/internal/event"
 	"golang.org/x/tools/internal/lsp/protocol"
-	errors "golang.org/x/xerrors"
 )
 
-func Highlight(ctx context.Context, snapshot Snapshot, fh FileHandle, pos protocol.Position) ([]protocol.Range, error) {
+func Highlight(ctx context.Context, snapshot Snapshot, fh FileHandle, position protocol.Position) ([]protocol.Range, error) {
 	ctx, done := event.Start(ctx, "source.Highlight")
 	defer done()
 
@@ -27,31 +26,27 @@ func Highlight(ctx context.Context, snapshot Snapshot, fh FileHandle, pos protoc
 	// the file belongs to a workspace package.
 	pkg, err := snapshot.PackageForFile(ctx, fh.URI(), TypecheckFull, WidestPackage)
 	if err != nil {
-		return nil, errors.Errorf("getting package for Highlight: %w", err)
+		return nil, fmt.Errorf("getting package for Highlight: %w", err)
 	}
 	pgf, err := pkg.File(fh.URI())
 	if err != nil {
-		return nil, errors.Errorf("getting file for Highlight: %w", err)
+		return nil, fmt.Errorf("getting file for Highlight: %w", err)
 	}
 
-	spn, err := pgf.Mapper.PointSpan(pos)
+	pos, err := pgf.Mapper.Pos(position)
 	if err != nil {
 		return nil, err
 	}
-	rng, err := spn.Range(pgf.Mapper.Converter)
-	if err != nil {
-		return nil, err
-	}
-	path, _ := astutil.PathEnclosingInterval(pgf.File, rng.Start, rng.Start)
+	path, _ := astutil.PathEnclosingInterval(pgf.File, pos, pos)
 	if len(path) == 0 {
-		return nil, fmt.Errorf("no enclosing position found for %v:%v", int(pos.Line), int(pos.Character))
+		return nil, fmt.Errorf("no enclosing position found for %v:%v", position.Line, position.Character)
 	}
 	// If start == end for astutil.PathEnclosingInterval, the 1-char interval
 	// following start is used instead. As a result, we might not get an exact
 	// match so we should check the 1-char interval to the left of the passed
 	// in position to see if that is an exact match.
 	if _, ok := path[0].(*ast.Ident); !ok {
-		if p, _ := astutil.PathEnclosingInterval(pgf.File, rng.Start-1, rng.Start-1); p != nil {
+		if p, _ := astutil.PathEnclosingInterval(pgf.File, pos-1, pos-1); p != nil {
 			switch p[0].(type) {
 			case *ast.Ident, *ast.SelectorExpr:
 				path = p // use preceding ident/selector
@@ -136,7 +131,7 @@ Outer:
 			// If cursor is in a key: value expr, we don't want control flow highlighting
 			return
 		case *ast.CallExpr:
-			// If cusor is an arg in a callExpr, we don't want control flow highlighting.
+			// If cursor is an arg in a callExpr, we don't want control flow highlighting.
 			if i > 0 {
 				for _, arg := range node.Args {
 					if arg == path[i-1] {
@@ -443,7 +438,7 @@ func labelDecl(n *ast.Ident) *ast.Ident {
 func highlightImportUses(pkg Package, path []ast.Node, result map[posRange]struct{}) error {
 	basicLit, ok := path[0].(*ast.BasicLit)
 	if !ok {
-		return errors.Errorf("highlightImportUses called with an ast.Node of type %T", basicLit)
+		return fmt.Errorf("highlightImportUses called with an ast.Node of type %T", basicLit)
 	}
 	ast.Inspect(path[len(path)-1], func(node ast.Node) bool {
 		if imp, ok := node.(*ast.ImportSpec); ok && imp.Path == basicLit {
@@ -470,7 +465,7 @@ func highlightImportUses(pkg Package, path []ast.Node, result map[posRange]struc
 func highlightIdentifiers(pkg Package, path []ast.Node, result map[posRange]struct{}) error {
 	id, ok := path[0].(*ast.Ident)
 	if !ok {
-		return errors.Errorf("highlightIdentifiers called with an ast.Node of type %T", id)
+		return fmt.Errorf("highlightIdentifiers called with an ast.Node of type %T", id)
 	}
 	// Check if ident is inside return or func decl.
 	highlightFuncControlFlow(path, result)

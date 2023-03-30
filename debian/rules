@@ -2,25 +2,32 @@
 # -*- makefile -*-
 
 # Excluded binaries. List all binary names:
-# rg -l -g'!*_test.go' -g'!testdata' '^package main'|xargs dirname|sort -u
+# go list -f '{{ if eq .Name "main" }}{{ .ImportPath }}{{ end }}' ./...
+# (cd gopls && go list -f '{{ if eq .Name "main" }}{{ .ImportPath }}{{ end }}' ./...)
 export DH_GOLANG_EXCLUDES := \
 	cmd/cover \
 	cmd/getgo/server \
+	cmd/signature-fuzzer \
 	gopls/api-diff \
 	gopls/doc \
 	gopls/integration/govim \
 	gopls/internal/coverage \
 	gopls/release \
 	internal/lsp/helper \
-	internal/stack/gostacks
+	internal/stack/gostacks \
+	internal/typeparams/example/findtypeparams
 
 # Excluded tests
 export DH_GOLANG_EXCLUDES += \
+	copyright \
 	gopls/internal/regtest \
 	gopls/test
 
 # needed for tests.
-export DH_GOLANG_INSTALL_EXTRA := godoc/static gopls/go.sum
+export DH_GOLANG_INSTALL_EXTRA := \
+	godoc/static \
+	gopls/go.sum \
+	internal/lsp/cmd/usage
 
 # eg #753978
 # stress #793693

@@ -5,6 +5,7 @@
 package cache
 
 import (
+	"fmt"
 	"go/ast"
 	"go/scanner"
 	"go/types"
@@ -12,7 +13,6 @@ import (
 	"golang.org/x/mod/module"
 	"golang.org/x/tools/internal/lsp/source"
 	"golang.org/x/tools/internal/span"
-	errors "golang.org/x/xerrors"
 )
 
 // pkg contains the type information needed by the source package.
@@ -29,7 +29,7 @@ type pkg struct {
 	types           *types.Package
 	typesInfo       *types.Info
 	typesSizes      types.Sizes
-	hasFixedFiles   bool
+	hasFixedFiles   bool // if true, AST was sufficiently mangled that we should hide type errors
 }
 
 // Declare explicit types for files and directories to distinguish between the two.
@@ -70,7 +70,7 @@ func (p *pkg) File(uri span.URI) (*source.ParsedGoFile, error) {
 			return gf, nil
 		}
 	}
-	return nil, errors.Errorf("no parsed file for %s in %v", uri, p.m.ID)
+	return nil, fmt.Errorf("no parsed file for %s in %v", uri, p.m.ID)
 }
 
 func (p *pkg) GetSyntax() []*ast.File {
@@ -106,7 +106,7 @@ func (p *pkg) GetImport(pkgPath string) (source.Package, error) {
 		return imp, nil
 	}
 	// Don't return a nil pointer because that still satisfies the interface.
-	return nil, errors.Errorf("no imported package for %s", pkgPath)
+	return nil, fmt.Errorf("no imported package for %s", pkgPath)
 }
 
 func (p *pkg) MissingDependencies() []string {

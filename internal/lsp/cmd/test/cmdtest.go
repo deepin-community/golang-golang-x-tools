@@ -8,6 +8,7 @@ package cmdtest
 import (
 	"bytes"
 	"context"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -49,7 +50,7 @@ func TestCommandLine(t *testing.T, testdata string, options func(*source.Options
 
 func NewTestServer(ctx context.Context, options func(*source.Options)) *servertest.TCPServer {
 	ctx = debug.WithInstance(ctx, "", "")
-	cache := cache.New(options)
+	cache := cache.New(nil, nil, options)
 	ss := lsprpc.NewStreamServer(cache, false)
 	return servertest.NewTCPServer(ctx, ss, nil)
 }
@@ -112,6 +113,10 @@ func (r *runner) Hover(t *testing.T, spn span.Span, info string) {
 	//TODO: hovering not supported on command line
 }
 
+func (r *runner) InlayHints(t *testing.T, spn span.Span) {
+	// TODO: inlayHints not supported on command line
+}
+
 func (r *runner) runGoplsCmd(t testing.TB, args ...string) (string, string) {
 	rStdout, wStdout, err := os.Pipe()
 	if err != nil {
@@ -137,7 +142,8 @@ func (r *runner) runGoplsCmd(t testing.TB, args ...string) (string, string) {
 	os.Stdout, os.Stderr = wStdout, wStderr
 	app := cmd.New("gopls-test", r.data.Config.Dir, r.data.Exported.Config.Env, r.options)
 	remote := r.remote
-	err = tool.Run(tests.Context(t),
+	s := flag.NewFlagSet(app.Name(), flag.ExitOnError)
+	err = tool.Run(tests.Context(t), s,
 		app,
 		append([]string{fmt.Sprintf("-remote=internal@%s", remote)}, args...))
 	if err != nil {

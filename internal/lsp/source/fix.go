@@ -14,9 +14,9 @@ import (
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/internal/lsp/analysis/fillstruct"
 	"golang.org/x/tools/internal/lsp/analysis/undeclaredname"
+	"golang.org/x/tools/internal/lsp/bug"
 	"golang.org/x/tools/internal/lsp/protocol"
 	"golang.org/x/tools/internal/span"
-	errors "golang.org/x/xerrors"
 )
 
 type (
@@ -32,6 +32,7 @@ type (
 
 const (
 	FillStruct      = "fill_struct"
+	StubMethods     = "stub_methods"
 	UndeclaredName  = "undeclared_name"
 	ExtractVariable = "extract_variable"
 	ExtractFunction = "extract_function"
@@ -45,6 +46,7 @@ var suggestedFixes = map[string]SuggestedFixFunc{
 	ExtractVariable: singleFile(extractVariable),
 	ExtractFunction: singleFile(extractFunction),
 	ExtractMethod:   singleFile(extractMethod),
+	StubMethods:     stubSuggestedFixFunc,
 }
 
 // singleFile calls analyzers that expect inputs for a single file
@@ -83,7 +85,15 @@ func ApplyFix(ctx context.Context, fix string, snapshot Snapshot, fh VersionedFi
 	fset := snapshot.FileSet()
 	editsPerFile := map[span.URI]*protocol.TextDocumentEdit{}
 	for _, edit := range suggestion.TextEdits {
-		spn, err := span.NewRange(fset, edit.Pos, edit.End).Span()
+		tokFile := fset.File(edit.Pos)
+		if tokFile == nil {
+			return nil, bug.Errorf("no file for edit position")
+		}
+		end := edit.End
+		if !end.IsValid() {
+			end = edit.Pos
+		}
+		spn, err := span.NewRange(tokFile, edit.Pos, end).Span()
 		if err != nil {
 			return nil, err
 		}
@@ -128,7 +138,7 @@ func ApplyFix(ctx context.Context, fix string, snapshot Snapshot, fh VersionedFi
 func getAllSuggestedFixInputs(ctx context.Context, snapshot Snapshot, fh FileHandle, pRng protocol.Range) (*token.FileSet, span.Range, []byte, *ast.File, *types.Package, *types.Info, error) {
 	pkg, pgf, err := GetParsedFile(ctx, snapshot, fh, NarrowestPackage)
 	if err != nil {
-		return nil, span.Range{}, nil, nil, nil, nil, errors.Errorf("getting file for Identifier: %w", err)
+		return nil, span.Range{}, nil, nil, nil, nil, fmt.Errorf("getting file for Identifier: %w", err)
 	}
 	rng, err := pgf.Mapper.RangeToSpanRange(pRng)
 	if err != nil {

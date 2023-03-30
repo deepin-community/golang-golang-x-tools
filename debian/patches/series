@@ -4,7 +4,6 @@
 0004-Disable-embedding-static-files-for-godoc-cmd.patch
 0005-Do_not_depend_on_golang-doc.patch
 0006-Use_32bit_tests_on_mips.patch
-0007-skip-TestIBExportData_stdlib.patch
-0008-skip-tests-that-run-go-build.patch
-0009-skip-test-needs-go-mod.patch
-0010-skip-license-testing.patch
+0007-skip-tests-that-run-go-build.patch
+0008-skip-test-needs-go-mod.patch
+0009-skip-license-testing.patch

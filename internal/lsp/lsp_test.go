@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"golang.org/x/tools/internal/lsp/bug"
 	"golang.org/x/tools/internal/lsp/cache"
 	"golang.org/x/tools/internal/lsp/command"
 	"golang.org/x/tools/internal/lsp/diff"
@@ -27,6 +28,7 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	bug.PanicOnBugs = true
 	testenv.ExitIfSmallMachine()
 	os.Exit(m.Run())
 }
@@ -47,13 +49,13 @@ type runner struct {
 func testLSP(t *testing.T, datum *tests.Data) {
 	ctx := tests.Context(t)
 
-	cache := cache.New(nil)
+	cache := cache.New(nil, nil, nil)
 	session := cache.NewSession(ctx)
 	options := source.DefaultOptions().Clone()
 	tests.DefaultOptions(options)
 	session.SetOptions(options)
 	options.SetEnvSlice(datum.Config.Env)
-	view, snapshot, release, err := session.NewView(ctx, datum.Config.Dir, span.URIFromPath(datum.Config.Dir), "", options)
+	view, snapshot, release, err := session.NewView(ctx, datum.Config.Dir, span.URIFromPath(datum.Config.Dir), options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,14 +67,16 @@ func testLSP(t *testing.T, datum *tests.Data) {
 	tests.EnableAllAnalyzers(view, options)
 	view.SetOptions(ctx, options)
 
+	// Enable all inlay hints for tests.
+	tests.EnableAllInlayHints(view, options)
+
 	// Only run the -modfile specific tests in module mode with Go 1.14 or above.
 	datum.ModfileFlagAvailable = len(snapshot.ModFiles()) > 0 && testenv.Go1Point() >= 14
 	release()
 
 	var modifications []source.FileModification
 	for filename, content := range datum.Config.Overlay {
-		kind := source.DetectLanguage("", filename)
-		if kind != source.Go {
+		if filepath.Ext(filename) != ".go" {
 			continue
 		}
 		modifications = append(modifications, source.FileModification{
@@ -117,13 +121,13 @@ func (c testClient) ShowMessage(context.Context, *protocol.ShowMessageParams) er
 	return nil
 }
 
-func (c testClient) ApplyEdit(ctx context.Context, params *protocol.ApplyWorkspaceEditParams) (*protocol.ApplyWorkspaceEditResponse, error) {
+func (c testClient) ApplyEdit(ctx context.Context, params *protocol.ApplyWorkspaceEditParams) (*protocol.ApplyWorkspaceEditResult, error) {
 	res, err := applyTextDocumentEdits(c.runner, params.Edit.DocumentChanges)
 	if err != nil {
 		return nil, err
 	}
 	c.runner.editRecv <- res
-	return &protocol.ApplyWorkspaceEditResponse{Applied: true}, nil
+	return &protocol.ApplyWorkspaceEditResult{Applied: true}, nil
 }
 
 func (r *runner) CallHierarchy(t *testing.T, spn span.Span, expectedCalls *tests.CallHierarchyResult) {
@@ -187,7 +191,7 @@ func (r *runner) CallHierarchy(t *testing.T, spn span.Span, expectedCalls *tests
 }
 
 func (r *runner) CodeLens(t *testing.T, uri span.URI, want []protocol.CodeLens) {
-	if source.DetectLanguage("", uri.Filename()) != source.Mod {
+	if !strings.HasSuffix(uri.Filename(), "go.mod") {
 		return
 	}
 	got, err := r.server.codeLens(r.ctx, &protocol.CodeLensParams{
@@ -483,7 +487,7 @@ func (r *runner) Import(t *testing.T, spn span.Span) {
 	}
 }
 
-func (r *runner) SuggestedFix(t *testing.T, spn span.Span, actionKinds []string, expectedActions int) {
+func (r *runner) SuggestedFix(t *testing.T, spn span.Span, actionKinds []tests.SuggestedFix, expectedActions int) {
 	uri := spn.URI()
 	view, err := r.server.session.ViewOf(uri)
 	if err != nil {
@@ -512,9 +516,9 @@ func (r *runner) SuggestedFix(t *testing.T, spn span.Span, actionKinds []string,
 	}
 	codeActionKinds := []protocol.CodeActionKind{}
 	for _, k := range actionKinds {
-		codeActionKinds = append(codeActionKinds, protocol.CodeActionKind(k))
+		codeActionKinds = append(codeActionKinds, protocol.CodeActionKind(k.ActionKind))
 	}
-	actions, err := r.server.CodeAction(r.ctx, &protocol.CodeActionParams{
+	allActions, err := r.server.CodeAction(r.ctx, &protocol.CodeActionParams{
 		TextDocument: protocol.TextDocumentIdentifier{
 			URI: protocol.URIFromSpanURI(uri),
 		},
@@ -526,6 +530,16 @@ func (r *runner) SuggestedFix(t *testing.T, spn span.Span, actionKinds []string,
 	})
 	if err != nil {
 		t.Fatalf("CodeAction %s failed: %v", spn, err)
+	}
+	var actions []protocol.CodeAction
+	for _, action := range allActions {
+		for _, fix := range actionKinds {
+			if strings.Contains(action.Title, fix.Title) {
+				actions = append(actions, action)
+				break
+			}
+		}
+
 	}
 	if len(actions) != expectedActions {
 		// Hack: We assume that we only get one code action per range.
@@ -722,8 +736,10 @@ func (r *runner) Definition(t *testing.T, spn span.Span, d tests.Definition) {
 		expectHover := string(r.data.Golden(tag, d.Src.URI().Filename(), func() ([]byte, error) {
 			return []byte(hover.Contents.Value), nil
 		}))
-		if hover.Contents.Value != expectHover {
-			t.Errorf("%s:\n%s", d.Src, tests.Diff(t, expectHover, hover.Contents.Value))
+		got := tests.StripSubscripts(hover.Contents.Value)
+		expectHover = tests.StripSubscripts(expectHover)
+		if got != expectHover {
+			t.Errorf("%s:\n%s", d.Src, tests.Diff(t, expectHover, got))
 		}
 	}
 	if !d.OnlyHover {
@@ -929,6 +945,55 @@ func (r *runner) References(t *testing.T, src span.Span, itemList []span.Span) {
 	}
 }
 
+func (r *runner) InlayHints(t *testing.T, spn span.Span) {
+	uri := spn.URI()
+	filename := uri.Filename()
+
+	hints, err := r.server.InlayHint(r.ctx, &protocol.InlayHintParams{
+		TextDocument: protocol.TextDocumentIdentifier{
+			URI: protocol.URIFromSpanURI(uri),
+		},
+		// TODO: add Range
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Map inlay hints to text edits.
+	edits := make([]protocol.TextEdit, len(hints))
+	for i, hint := range hints {
+		var paddingLeft, paddingRight string
+		if hint.PaddingLeft {
+			paddingLeft = " "
+		}
+		if hint.PaddingRight {
+			paddingRight = " "
+		}
+		edits[i] = protocol.TextEdit{
+			Range:   protocol.Range{Start: *hint.Position, End: *hint.Position},
+			NewText: fmt.Sprintf("<%s%s%s>", paddingLeft, hint.Label[0].Value, paddingRight),
+		}
+	}
+
+	m, err := r.data.Mapper(uri)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sedits, err := source.FromProtocolEdits(m, edits)
+	if err != nil {
+		t.Error(err)
+	}
+	got := diff.ApplyEdits(string(m.Content), sedits)
+
+	withinlayHints := string(r.data.Golden("inlayHint", filename, func() ([]byte, error) {
+		return []byte(got), nil
+	}))
+
+	if withinlayHints != got {
+		t.Errorf("inlay hints failed for %s, expected:\n%v\ngot:\n%v", filename, withinlayHints, got)
+	}
+}
+
 func (r *runner) Rename(t *testing.T, spn span.Span, newText string) {
 	tag := fmt.Sprintf("%s-rename", newText)
 
@@ -1017,16 +1082,19 @@ func (r *runner) PrepareRename(t *testing.T, src span.Span, want *source.Prepare
 		}
 		return
 	}
-	if got.Start == got.End {
+	if got.Range.Start == got.Range.End {
 		// Special case for 0-length ranges. Marks can't specify a 0-length range,
 		// so just compare the start.
-		if got.Start != want.Range.Start {
-			t.Errorf("prepare rename failed: incorrect point, got %v want %v", got.Start, want.Range.Start)
+		if got.Range.Start != want.Range.Start {
+			t.Errorf("prepare rename failed: incorrect point, got %v want %v", got.Range.Start, want.Range.Start)
 		}
 	} else {
-		if protocol.CompareRange(*got, want.Range) != 0 {
-			t.Errorf("prepare rename failed: incorrect range got %v want %v", *got, want.Range)
+		if protocol.CompareRange(got.Range, want.Range) != 0 {
+			t.Errorf("prepare rename failed: incorrect range got %v want %v", got.Range, want.Range)
 		}
+	}
+	if got.Placeholder != want.Text {
+		t.Errorf("prepare rename failed: incorrect text got %v want %v", got.Placeholder, want.Text)
 	}
 }
 
@@ -1038,12 +1106,7 @@ func applyTextDocumentEdits(r *runner, edits []protocol.TextDocumentEdit) (map[s
 		// If we have already edited this file, we use the edited version (rather than the
 		// file in its original state) so that we preserve our initial changes.
 		if content, ok := res[uri]; ok {
-			m = &protocol.ColumnMapper{
-				URI: uri,
-				Converter: span.NewContentConverter(
-					uri.Filename(), []byte(content)),
-				Content: []byte(content),
-			}
+			m = protocol.NewColumnMapper(uri, []byte(content))
 		} else {
 			var err error
 			if m, err = r.data.Mapper(uri); err != nil {
@@ -1278,12 +1341,7 @@ func TestBytesOffset(t *testing.T) {
 		f := fset.AddFile(fname, -1, len(test.text))
 		f.SetLinesForContent([]byte(test.text))
 		uri := span.URIFromPath(fname)
-		converter := span.NewContentConverter(fname, []byte(test.text))
-		mapper := &protocol.ColumnMapper{
-			URI:       uri,
-			Converter: converter,
-			Content:   []byte(test.text),
-		}
+		mapper := protocol.NewColumnMapper(uri, []byte(test.text))
 		got, err := mapper.Point(test.pos)
 		if err != nil && test.want != -1 {
 			t.Errorf("unexpected error: %v", err)

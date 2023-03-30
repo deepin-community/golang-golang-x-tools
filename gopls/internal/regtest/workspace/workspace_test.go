@@ -5,23 +5,23 @@
 package workspace
 
 import (
-	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
 	"golang.org/x/tools/gopls/internal/hooks"
-	. "golang.org/x/tools/internal/lsp/regtest"
-
-	"golang.org/x/tools/internal/lsp/command"
+	"golang.org/x/tools/internal/lsp/bug"
 	"golang.org/x/tools/internal/lsp/fake"
 	"golang.org/x/tools/internal/lsp/protocol"
 	"golang.org/x/tools/internal/testenv"
+
+	. "golang.org/x/tools/internal/lsp/regtest"
 )
 
 func TestMain(m *testing.M) {
+	bug.PanicOnBugs = true
 	Main(m, hooks.Options)
 }
 
@@ -137,6 +137,24 @@ func TestReferences(t *testing.T) {
 	}
 }
 
+func TestDirectoryFilters(t *testing.T) {
+	WithOptions(
+		ProxyFiles(workspaceProxy),
+		WorkspaceFolders("pkg"),
+		Settings{
+			"directoryFilters": []string{"-inner"},
+		},
+	).Run(t, workspaceModule, func(t *testing.T, env *Env) {
+		syms := env.WorkspaceSymbol("Hi")
+		sort.Slice(syms, func(i, j int) bool { return syms[i].ContainerName < syms[j].ContainerName })
+		for _, s := range syms {
+			if strings.Contains(s.ContainerName, "inner") {
+				t.Errorf("WorkspaceSymbol: found symbol %q with container %q, want \"inner\" excluded", s.Name, s.ContainerName)
+			}
+		}
+	})
+}
+
 // Make sure that analysis diagnostics are cleared for the whole package when
 // the only opened file is closed. This test was inspired by the experience in
 // VS Code, where clicking on a reference result triggers a
@@ -160,6 +178,8 @@ func TestClearAnalysisDiagnostics(t *testing.T) {
 // This test checks that gopls updates the set of files it watches when a
 // replace target is added to the go.mod.
 func TestWatchReplaceTargets(t *testing.T) {
+	t.Skipf("skipping known-flaky test: see https://go.dev/issue/50748")
+
 	WithOptions(
 		ProxyFiles(workspaceProxy),
 		WorkspaceFolders("pkg"),
@@ -611,6 +631,19 @@ replace a.com => %s/moda/a
 	})
 }
 
+// TestBadGoWork exercises the panic from golang/vscode-go#2121.
+func TestBadGoWork(t *testing.T) {
+	const files = `
+-- go.work --
+use ./bar
+-- bar/go.mod --
+module example.com/bar
+`
+	Run(t, files, func(t *testing.T, env *Env) {
+		env.OpenFile("go.work")
+	})
+}
+
 func TestUseGoWork(t *testing.T) {
 	// This test validates certain functionality related to using a go.work
 	// file to specify workspace modules.
@@ -650,15 +683,14 @@ func Hello() int {
 -- go.work --
 go 1.17
 
-directory (
+use (
 	./moda/a
 )
 `
 	WithOptions(
 		ProxyFiles(workspaceModuleProxy),
-		Modes(Experimental),
 	).Run(t, multiModule, func(t *testing.T, env *Env) {
-		// Initially, the gopls.mod should cause only the a.com module to be
+		// Initially, the go.work should cause only the a.com module to be
 		// loaded. Validate this by jumping to a definition in b.com and ensuring
 		// that we go to the module cache.
 		env.OpenFile("moda/a/a.go")
@@ -679,12 +711,12 @@ directory (
 			t.Fatal(err)
 		}
 
-		// Now, modify the gopls.mod file on disk to activate the b.com module in
+		// Now, modify the go.work file on disk to activate the b.com module in
 		// the workspace.
 		env.WriteWorkspaceFile("go.work", `
 go 1.17
 
-directory (
+use (
 	./moda/a
 	./modb
 )
@@ -704,35 +736,195 @@ directory (
 		)
 		env.ApplyQuickFixes("modb/go.mod", d.Diagnostics)
 		env.Await(env.DiagnosticAtRegexp("modb/b/b.go", "x"))
+
 		// Jumping to definition should now go to b.com in the workspace.
 		if err := checkHelloLocation("modb/b/b.go"); err != nil {
 			t.Fatal(err)
 		}
 
-		// Now, let's modify the gopls.mod *overlay* (not on disk), and verify that
+		// Now, let's modify the go.work *overlay* (not on disk), and verify that
 		// this change is only picked up once it is saved.
 		env.OpenFile("go.work")
 		env.Await(env.DoneWithOpen())
 		env.SetBufferContent("go.work", `go 1.17
 
-directory (
+use (
 	./moda/a
 )`)
 
-		// Editing the gopls.mod removes modb from the workspace modules, and so
-		// should clear outstanding diagnostics...
-		env.Await(OnceMet(
-			env.DoneWithChange(),
-			EmptyDiagnostics("modb/go.mod"),
-		))
-		// ...but does not yet cause a workspace reload, so we should still jump to modb.
+		// Simply modifying the go.work file does not cause a reload, so we should
+		// still jump within the workspace.
+		//
+		// TODO: should editing the go.work above cause modb diagnostics to be
+		// suppressed?
+		env.Await(env.DoneWithChange())
 		if err := checkHelloLocation("modb/b/b.go"); err != nil {
 			t.Fatal(err)
 		}
+
 		// Saving should reload the workspace.
 		env.SaveBufferWithoutActions("go.work")
 		if err := checkHelloLocation("b.com@v1.2.3/b/b.go"); err != nil {
 			t.Fatal(err)
+		}
+
+		// This fails if guarded with a OnceMet(DoneWithSave(), ...), because it is
+		// debounced (and therefore not synchronous with the change).
+		env.Await(EmptyOrNoDiagnostics("modb/go.mod"))
+
+		// Test Formatting.
+		env.SetBufferContent("go.work", `go 1.18
+  use      (
+
+
+
+		./moda/a
+)
+`) // TODO(matloob): For some reason there's a "start position 7:0 is out of bounds" error when the ")" is on the last character/line in the file. Rob probably knows what's going on.
+		env.SaveBuffer("go.work")
+		env.Await(env.DoneWithSave())
+		gotWorkContents := env.ReadWorkspaceFile("go.work")
+		wantWorkContents := `go 1.18
+
+use (
+	./moda/a
+)
+`
+		if gotWorkContents != wantWorkContents {
+			t.Fatalf("formatted contents of workspace: got %q; want %q", gotWorkContents, wantWorkContents)
+		}
+	})
+}
+
+func TestUseGoWorkDiagnosticMissingModule(t *testing.T) {
+	const files = `
+-- go.work --
+go 1.18
+
+use ./foo
+-- bar/go.mod --
+module example.com/bar
+`
+	Run(t, files, func(t *testing.T, env *Env) {
+		env.OpenFile("go.work")
+		env.Await(
+			env.DiagnosticAtRegexpWithMessage("go.work", "use", "directory ./foo does not contain a module"),
+		)
+		// The following tests is a regression test against an issue where we weren't
+		// copying the workFile struct field on workspace when a new one was created in
+		// (*workspace).invalidate. Set the buffer content to a working file so that
+		// invalidate recognizes the workspace to be change and copies over the workspace
+		// struct, and then set the content back to the old contents to make sure
+		// the diagnostic still shows up.
+		env.SetBufferContent("go.work", "go 1.18 \n\n use ./bar\n")
+		env.Await(
+			env.NoDiagnosticAtRegexp("go.work", "use"),
+		)
+		env.SetBufferContent("go.work", "go 1.18 \n\n use ./foo\n")
+		env.Await(
+			env.DiagnosticAtRegexpWithMessage("go.work", "use", "directory ./foo does not contain a module"),
+		)
+	})
+}
+
+func TestUseGoWorkDiagnosticSyntaxError(t *testing.T) {
+	const files = `
+-- go.work --
+go 1.18
+
+usa ./foo
+replace
+`
+	Run(t, files, func(t *testing.T, env *Env) {
+		env.OpenFile("go.work")
+		env.Await(
+			env.DiagnosticAtRegexpWithMessage("go.work", "usa", "unknown directive: usa"),
+			env.DiagnosticAtRegexpWithMessage("go.work", "replace", "usage: replace"),
+		)
+	})
+}
+
+func TestUseGoWorkHover(t *testing.T) {
+	const files = `
+-- go.work --
+go 1.18
+
+use ./foo
+use (
+	./bar
+	./bar/baz
+)
+-- foo/go.mod --
+module example.com/foo
+-- bar/go.mod --
+module example.com/bar
+-- bar/baz/go.mod --
+module example.com/bar/baz
+`
+	Run(t, files, func(t *testing.T, env *Env) {
+		env.OpenFile("go.work")
+
+		tcs := map[string]string{
+			`\./foo`:      "example.com/foo",
+			`(?m)\./bar$`: "example.com/bar",
+			`\./bar/baz`:  "example.com/bar/baz",
+		}
+
+		for hoverRE, want := range tcs {
+			pos := env.RegexpSearch("go.work", hoverRE)
+			got, _ := env.Hover("go.work", pos)
+			if got.Value != want {
+				t.Errorf(`hover on %q: got %q, want %q`, hoverRE, got, want)
+			}
+		}
+	})
+}
+
+func TestExpandToGoWork(t *testing.T) {
+	testenv.NeedsGo1Point(t, 18)
+	const workspace = `
+-- moda/a/go.mod --
+module a.com
+
+require b.com v1.2.3
+-- moda/a/a.go --
+package a
+
+import (
+	"b.com/b"
+)
+
+func main() {
+	var x int
+	_ = b.Hello()
+}
+-- modb/go.mod --
+module b.com
+
+require example.com v1.2.3
+-- modb/b/b.go --
+package b
+
+func Hello() int {
+	var x int
+}
+-- go.work --
+go 1.17
+
+use (
+	./moda/a
+	./modb
+)
+`
+	WithOptions(
+		WorkspaceFolders("moda/a"),
+	).Run(t, workspace, func(t *testing.T, env *Env) {
+		env.OpenFile("moda/a/a.go")
+		env.Await(env.DoneWithOpen())
+		location, _ := env.GoToDefinition("moda/a/a.go", env.RegexpSearch("moda/a/a.go", "Hello"))
+		want := "modb/b/b.go"
+		if !strings.HasSuffix(location, want) {
+			t.Errorf("expected %s, got %v", want, location)
 		}
 	})
 }
@@ -817,77 +1009,6 @@ func main() {
 	})
 }
 
-func TestWorkspaceDirAccess(t *testing.T) {
-	const multiModule = `
--- moda/a/go.mod --
-module a.com
-
--- moda/a/a.go --
-package main
-
-func main() {
-	fmt.Println("Hello")
-}
--- modb/go.mod --
-module b.com
--- modb/b/b.go --
-package main
-
-func main() {
-	fmt.Println("World")
-}
-`
-	WithOptions(
-		Modes(Experimental),
-		SendPID(),
-	).Run(t, multiModule, func(t *testing.T, env *Env) {
-		params := &protocol.ExecuteCommandParams{
-			Command:   command.WorkspaceMetadata.ID(),
-			Arguments: []json.RawMessage{json.RawMessage("{}")},
-		}
-		var result command.WorkspaceMetadataResult
-		env.ExecuteCommand(params, &result)
-
-		if n := len(result.Workspaces); n != 1 {
-			env.T.Fatalf("got %d workspaces, want 1", n)
-		}
-		// Don't factor this out of Server.addFolders. vscode-go expects this
-		// directory.
-		modPath := filepath.Join(result.Workspaces[0].ModuleDir, "go.mod")
-		gotb, err := ioutil.ReadFile(modPath)
-		if err != nil {
-			t.Fatalf("reading expected workspace modfile: %v", err)
-		}
-		got := string(gotb)
-		for _, want := range []string{"a.com v1.9999999.0-goplsworkspace", "b.com v1.9999999.0-goplsworkspace"} {
-			if !strings.Contains(got, want) {
-				// want before got here, since the go.mod is multi-line
-				t.Fatalf("workspace go.mod missing %q. got:\n%s", want, got)
-			}
-		}
-		workdir := env.Sandbox.Workdir.RootURI().SpanURI().Filename()
-		env.WriteWorkspaceFile("gopls.mod", fmt.Sprintf(`
-				module gopls-workspace
-
-				require (
-					a.com v1.9999999.0-goplsworkspace
-				)
-
-				replace a.com => %s/moda/a
-				`, workdir))
-		env.Await(env.DoneWithChangeWatchedFiles())
-		gotb, err = ioutil.ReadFile(modPath)
-		if err != nil {
-			t.Fatalf("reading expected workspace modfile: %v", err)
-		}
-		got = string(gotb)
-		want := "b.com v1.9999999.0-goplsworkspace"
-		if strings.Contains(got, want) {
-			t.Fatalf("workspace go.mod contains unexpected %q. got:\n%s", want, got)
-		}
-	})
-}
-
 func TestDirectoryFiltersLoads(t *testing.T) {
 	// exclude, and its error, should be excluded from the workspace.
 	const files = `
@@ -900,10 +1021,10 @@ package exclude
 
 const _ = Nonexistant
 `
-	cfg := EditorConfig{
-		DirectoryFilters: []string{"-exclude"},
-	}
-	WithOptions(cfg).Run(t, files, func(t *testing.T, env *Env) {
+
+	WithOptions(
+		Settings{"directoryFilters": []string{"-exclude"}},
+	).Run(t, files, func(t *testing.T, env *Env) {
 		env.Await(NoDiagnostics("exclude/x.go"))
 	})
 }
@@ -928,10 +1049,9 @@ const _ = Nonexistant // should be ignored, since this is a non-workspace packag
 const X = 1
 `
 
-	cfg := EditorConfig{
-		DirectoryFilters: []string{"-exclude"},
-	}
-	WithOptions(cfg).Run(t, files, func(t *testing.T, env *Env) {
+	WithOptions(
+		Settings{"directoryFilters": []string{"-exclude"}},
+	).Run(t, files, func(t *testing.T, env *Env) {
 		env.Await(
 			NoDiagnostics("exclude/exclude.go"), // filtered out
 			NoDiagnostics("include/include.go"), // successfully builds
@@ -978,10 +1098,11 @@ go 1.12
 -- exclude.com@v1.0.0/exclude.go --
 package exclude
 `
-	cfg := EditorConfig{
-		DirectoryFilters: []string{"-exclude"},
-	}
-	WithOptions(cfg, Modes(Experimental), ProxyFiles(proxy)).Run(t, files, func(t *testing.T, env *Env) {
+	WithOptions(
+		Modes(Experimental),
+		ProxyFiles(proxy),
+		Settings{"directoryFilters": []string{"-exclude"}},
+	).Run(t, files, func(t *testing.T, env *Env) {
 		env.Await(env.DiagnosticAtRegexp("include/include.go", `exclude.(X)`))
 	})
 }
@@ -1068,16 +1189,166 @@ go 1.12
 package main
 `
 	WithOptions(
-		EditorConfig{Env: map[string]string{
-			"GOPATH": filepath.FromSlash("$SANDBOX_WORKDIR/gopath"),
-		}},
-		Modes(Singleton),
+		EnvVars{"GOPATH": filepath.FromSlash("$SANDBOX_WORKDIR/gopath")},
+		Modes(Default),
 	).Run(t, mod, func(t *testing.T, env *Env) {
 		env.Await(
 			// Confirm that the build configuration is seen as valid,
 			// even though there are technically multiple go.mod files in the
 			// worskpace.
 			LogMatching(protocol.Info, ".*valid build configuration = true.*", 1, false),
+		)
+	})
+}
+
+func TestAddGoWork(t *testing.T) {
+	const nomod = `
+-- a/go.mod --
+module a.com
+
+go 1.16
+-- a/main.go --
+package main
+
+func main() {}
+-- b/go.mod --
+module b.com
+
+go 1.16
+-- b/main.go --
+package main
+
+func main() {}
+`
+	WithOptions(
+		Modes(Default),
+	).Run(t, nomod, func(t *testing.T, env *Env) {
+		env.OpenFile("a/main.go")
+		env.OpenFile("b/main.go")
+		env.Await(
+			DiagnosticAt("a/main.go", 0, 0),
+			DiagnosticAt("b/main.go", 0, 0),
+		)
+		env.WriteWorkspaceFile("go.work", `go 1.16
+
+use (
+	a
+	b
+)
+`)
+		env.Await(NoOutstandingDiagnostics())
+	})
+}
+
+// Tests the fix for golang/go#52500.
+func TestChangeTestVariant_Issue52500(t *testing.T) {
+	// This test fails for unknown reasons at Go <= 15. Presumably the loading of
+	// test variants behaves differently, possibly due to lack of support for
+	// native overlays.
+	testenv.NeedsGo1Point(t, 16)
+	const src = `
+-- go.mod --
+module mod.test
+
+go 1.12
+-- main_test.go --
+package main_test
+
+type Server struct{}
+
+const mainConst = otherConst
+-- other_test.go --
+package main_test
+
+const otherConst = 0
+
+func (Server) Foo() {}
+`
+
+	Run(t, src, func(t *testing.T, env *Env) {
+		env.OpenFile("other_test.go")
+		env.RegexpReplace("other_test.go", "main_test", "main")
+
+		// For this test to function, it is necessary to wait on both of the
+		// expectations below: the bug is that when switching the package name in
+		// other_test.go from main->main_test, metadata for main_test is not marked
+		// as invalid. So we need to wait for the metadata of main_test.go to be
+		// updated before moving other_test.go back to the main_test package.
+		env.Await(
+			env.DiagnosticAtRegexpWithMessage("other_test.go", "Server", "undeclared"),
+			env.DiagnosticAtRegexpWithMessage("main_test.go", "otherConst", "undeclared"),
+		)
+		env.RegexpReplace("other_test.go", "main", "main_test")
+		env.Await(
+			EmptyDiagnostics("other_test.go"),
+			EmptyDiagnostics("main_test.go"),
+		)
+
+		// This will cause a test failure if other_test.go is not in any package.
+		_, _ = env.GoToDefinition("other_test.go", env.RegexpSearch("other_test.go", "Server"))
+	})
+}
+
+// Test for golang/go#48929.
+func TestClearNonWorkspaceDiagnostics(t *testing.T) {
+	testenv.NeedsGo1Point(t, 18) // uses go.work
+
+	const ws = `
+-- go.work --
+go 1.18
+
+use (
+        ./b
+)
+-- a/go.mod --
+module a
+
+go 1.17
+-- a/main.go --
+package main
+
+func main() {
+   var V string
+}
+-- b/go.mod --
+module b
+
+go 1.17
+-- b/main.go --
+package b
+
+import (
+        _ "fmt"
+)
+`
+	Run(t, ws, func(t *testing.T, env *Env) {
+		env.OpenFile("b/main.go")
+		env.Await(
+			OnceMet(
+				env.DoneWithOpen(),
+				NoDiagnostics("a/main.go"),
+			),
+		)
+		env.OpenFile("a/main.go")
+		env.Await(
+			OnceMet(
+				env.DoneWithOpen(),
+				env.DiagnosticAtRegexpWithMessage("a/main.go", "V", "declared but not used"),
+			),
+		)
+		env.CloseBuffer("a/main.go")
+
+		// Make an arbitrary edit because gopls explicitly diagnoses a/main.go
+		// whenever it is "changed".
+		//
+		// TODO(rfindley): it should not be necessary to make another edit here.
+		// Gopls should be smart enough to avoid diagnosing a.
+		env.RegexpReplace("b/main.go", "package b", "package b // a package")
+		env.Await(
+			OnceMet(
+				env.DoneWithChange(),
+				EmptyDiagnostics("a/main.go"),
+			),
 		)
 	})
 }

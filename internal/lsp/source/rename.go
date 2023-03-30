@@ -7,6 +7,8 @@ package source
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"go/ast"
 	"go/format"
 	"go/token"
@@ -20,7 +22,6 @@ import (
 	"golang.org/x/tools/internal/lsp/protocol"
 	"golang.org/x/tools/internal/span"
 	"golang.org/x/tools/refactor/satisfy"
-	errors "golang.org/x/xerrors"
 )
 
 type renamer struct {
@@ -32,7 +33,7 @@ type renamer struct {
 	errors             string
 	from, to           string
 	satisfyConstraints map[satisfy.Constraint]bool
-	packages           map[*types.Package]Package // may include additional packages that are a rdep of pkg
+	packages           map[*types.Package]Package // may include additional packages that are a dep of pkg
 	msets              typeutil.MethodSetCache
 	changeMethods      bool
 }
@@ -105,13 +106,13 @@ func Rename(ctx context.Context, s Snapshot, f FileHandle, pp protocol.Position,
 		return nil, err
 	}
 	if obj.Name() == newName {
-		return nil, errors.Errorf("old and new names are the same: %s", newName)
+		return nil, fmt.Errorf("old and new names are the same: %s", newName)
 	}
 	if !isValidIdentifier(newName) {
-		return nil, errors.Errorf("invalid identifier to rename: %q", newName)
+		return nil, fmt.Errorf("invalid identifier to rename: %q", newName)
 	}
 	if pkg == nil || pkg.IsIllTyped() {
-		return nil, errors.Errorf("package for %s is ill typed", f.URI())
+		return nil, fmt.Errorf("package for %s is ill typed", f.URI())
 	}
 	refs, err := references(ctx, s, qos, true, false, true)
 	if err != nil {
@@ -151,7 +152,7 @@ func Rename(ctx context.Context, s Snapshot, f FileHandle, pp protocol.Position,
 		}
 	}
 	if r.hadConflicts {
-		return nil, errors.Errorf(r.errors)
+		return nil, fmt.Errorf(r.errors)
 	}
 
 	changes, err := r.update()
@@ -170,12 +171,7 @@ func Rename(ctx context.Context, s Snapshot, f FileHandle, pp protocol.Position,
 		if err != nil {
 			return nil, err
 		}
-		converter := span.NewContentConverter(uri.Filename(), data)
-		m := &protocol.ColumnMapper{
-			URI:       uri,
-			Converter: converter,
-			Content:   data,
-		}
+		m := protocol.NewColumnMapper(uri, data)
 		// Sort the edits first.
 		diff.SortTextEdits(edits)
 		protocolEdits, err := ToProtocolEdits(m, edits)
@@ -197,7 +193,7 @@ func (r *renamer) update() (map[span.URI][]diff.TextEdit, error) {
 		return nil, err
 	}
 	for _, ref := range r.refs {
-		refSpan, err := ref.spanRange.Span()
+		refSpan, err := ref.Span()
 		if err != nil {
 			return nil, err
 		}
@@ -242,15 +238,15 @@ func (r *renamer) update() (map[span.URI][]diff.TextEdit, error) {
 				continue
 			}
 			lines := strings.Split(comment.Text, "\n")
-			tok := r.fset.File(comment.Pos())
-			commentLine := tok.Position(comment.Pos()).Line
+			tokFile := r.fset.File(comment.Pos())
+			commentLine := tokFile.Line(comment.Pos())
 			for i, line := range lines {
 				lineStart := comment.Pos()
 				if i > 0 {
-					lineStart = tok.LineStart(commentLine + i)
+					lineStart = tokFile.LineStart(commentLine + i)
 				}
 				for _, locs := range docRegexp.FindAllIndex([]byte(line), -1) {
-					rng := span.NewRange(r.fset, lineStart+token.Pos(locs[0]), lineStart+token.Pos(locs[1]))
+					rng := span.NewRange(tokFile, lineStart+token.Pos(locs[0]), lineStart+token.Pos(locs[1]))
 					spn, err := rng.Span()
 					if err != nil {
 						return nil, err
@@ -269,7 +265,7 @@ func (r *renamer) update() (map[span.URI][]diff.TextEdit, error) {
 
 // docComment returns the doc for an identifier.
 func (r *renamer) docComment(pkg Package, id *ast.Ident) *ast.CommentGroup {
-	_, nodes, _ := pathEnclosingInterval(r.fset, pkg, id.Pos(), id.End())
+	_, tokFile, nodes, _ := pathEnclosingInterval(r.fset, pkg, id.Pos(), id.End())
 	for _, node := range nodes {
 		switch decl := node.(type) {
 		case *ast.FuncDecl:
@@ -298,25 +294,14 @@ func (r *renamer) docComment(pkg Package, id *ast.Ident) *ast.CommentGroup {
 				return nil
 			}
 
-			var file *ast.File
-			for _, f := range pkg.GetSyntax() {
-				if f.Pos() <= id.Pos() && id.Pos() <= f.End() {
-					file = f
-					break
-				}
-			}
-			if file == nil {
-				return nil
-			}
-
-			identLine := r.fset.Position(id.Pos()).Line
-			for _, comment := range file.Comments {
+			identLine := tokFile.Line(id.Pos())
+			for _, comment := range nodes[len(nodes)-1].(*ast.File).Comments {
 				if comment.Pos() > id.Pos() {
 					// Comment is after the identifier.
 					continue
 				}
 
-				lastCommentLine := r.fset.Position(comment.End()).Line
+				lastCommentLine := tokFile.Line(comment.End())
 				if lastCommentLine+1 == identLine {
 					return comment
 				}
@@ -332,13 +317,13 @@ func (r *renamer) docComment(pkg Package, id *ast.Ident) *ast.CommentGroup {
 func (r *renamer) updatePkgName(pkgName *types.PkgName) (*diff.TextEdit, error) {
 	// Modify ImportSpec syntax to add or remove the Name as needed.
 	pkg := r.packages[pkgName.Pkg()]
-	_, path, _ := pathEnclosingInterval(r.fset, pkg, pkgName.Pos(), pkgName.Pos())
+	_, tokFile, path, _ := pathEnclosingInterval(r.fset, pkg, pkgName.Pos(), pkgName.Pos())
 	if len(path) < 2 {
-		return nil, errors.Errorf("no path enclosing interval for %s", pkgName.Name())
+		return nil, fmt.Errorf("no path enclosing interval for %s", pkgName.Name())
 	}
 	spec, ok := path[1].(*ast.ImportSpec)
 	if !ok {
-		return nil, errors.Errorf("failed to update PkgName for %s", pkgName.Name())
+		return nil, fmt.Errorf("failed to update PkgName for %s", pkgName.Name())
 	}
 
 	var astIdent *ast.Ident // will be nil if ident is removed
@@ -354,7 +339,7 @@ func (r *renamer) updatePkgName(pkgName *types.PkgName) (*diff.TextEdit, error) 
 		EndPos: spec.EndPos,
 	}
 
-	rng := span.NewRange(r.fset, spec.Pos(), spec.End())
+	rng := span.NewRange(tokFile, spec.Pos(), spec.End())
 	spn, err := rng.Span()
 	if err != nil {
 		return nil, err

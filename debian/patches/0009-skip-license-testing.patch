@@ -1,0 +1,21 @@
+From: Shengjing Zhu <zhsj@debian.org>
+Date: Sun, 12 Sep 2021 16:50:29 +0800
+Subject: skip license testing
+
+Forwarded: not-needed
+---
+ gopls/internal/hooks/licenses_test.go | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/gopls/internal/hooks/licenses_test.go b/gopls/internal/hooks/licenses_test.go
+index 3b61d34..605a172 100644
+--- a/gopls/internal/hooks/licenses_test.go
++++ b/gopls/internal/hooks/licenses_test.go
+@@ -15,6 +15,7 @@ import (
+ )
+ 
+ func TestLicenses(t *testing.T) {
++	t.Skip("No need for Debian package")
+ 	// License text differs for older Go versions because staticcheck isn't
+ 	// supported for those versions.
+ 	testenv.NeedsGo1Point(t, 17)
