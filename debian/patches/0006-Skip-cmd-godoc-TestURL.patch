@@ -1,0 +1,27 @@
+From: =?utf-8?q?Mart=C3=ADn_Ferrari?= <tincho@debian.org>
+Date: Tue, 17 Nov 2020 02:14:58 +0800
+Subject: Skip cmd/godoc TestURL
+
+Origin: vendor
+Forwarded: not-needed
+Last-Update: 2019-07-29
+
+If golang-doc is not present, the start page for godoc does not contain the
+text expected in tests.
+Last-Update: 2019-07-29
+---
+ cmd/godoc/godoc_test.go | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/cmd/godoc/godoc_test.go b/cmd/godoc/godoc_test.go
+index 2240b0e..923128c 100644
+--- a/cmd/godoc/godoc_test.go
++++ b/cmd/godoc/godoc_test.go
+@@ -137,6 +137,7 @@ func hasTag(t string) bool {
+ }
+ 
+ func TestURL(t *testing.T) {
++	t.Skip("skipping test to avoid dependency on golang-doc for Debian build")
+ 	if runtime.GOOS == "plan9" {
+ 		t.Skip("skipping on plan9; fails to start up quickly enough")
+ 	}

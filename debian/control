@@ -1,27 +1,28 @@
 Source: golang-golang-x-tools
 Maintainer: Debian Go Packaging Team <team+pkg-go@tracker.debian.org>
-Uploaders: Martín Ferrari <tincho@debian.org>,
+Uploaders: Martina Ferrari <tina@debian.org>,
            Michael Stapelberg <stapelberg@debian.org>,
-           Tianon Gravi <tianon@debian.org>,
            Tim Potter <tpot@hpe.com>,
            Anthony Fok <foka@debian.org>,
 Section: golang
 Testsuite: autopkgtest-pkg-go
 Priority: optional
 Build-Depends: debhelper-compat (= 13),
-               dh-golang (>= 1.40~),
-               golang-any (>= 2:1.12~),
+               dh-golang (>= 1.58~),
+               golang-any (>= 2:1.18~),
                golang-github-sergi-go-diff-dev,
-               golang-github-yuin-goldmark-dev (>= 1.1.27),
-               golang-golang-x-mod-dev (>= 0.2.0),
-               golang-golang-x-net-dev (>= 1:0.0+git20200226.0de0cce),
-               golang-golang-x-sync-dev (>= 0.0~git20190911.cd5d95a),
-               golang-golang-x-sys-dev (>= 0.0~git20210124.22da62e),
-               golang-golang-x-xerrors-dev (>= 0.0~git20191204.9bdfabe),
-               golang-honnef-go-tools-dev (>= 2021.1.1~),
-               golang-mvdan-gofumpt-dev,
-               golang-mvdan-xurls-dev,
-Standards-Version: 4.6.0
+               golang-github-yuin-goldmark-dev (>= 1.4.13),
+               golang-golang-x-mod-dev (>= 0.6.0),
+               golang-golang-x-net-dev (>= 1:0.1.0),
+               golang-golang-x-sync-dev (>= 0.0~git20220722.886fb93),
+               golang-golang-x-sys-dev (>= 0.1.0),
+               golang-golang-x-text-dev (>= 0.4.0),
+               golang-golang-x-vuln-dev (>= 0.0~git20230201.4c848ed),
+               golang-gopkg-yaml.v3-dev (>= 3.0.1),
+               golang-honnef-go-tools-dev (>= 2022.1.3),
+               golang-mvdan-gofumpt-dev (>= 0.3.1),
+               golang-mvdan-xurls-dev (>= 2.4.0),
+Standards-Version: 4.6.2
 Vcs-Browser: https://salsa.debian.org/go-team/packages/golang-golang-x-tools
 Vcs-Git: https://salsa.debian.org/go-team/packages/golang-golang-x-tools.git
 Homepage: https://golang.org/x/tools
@@ -35,7 +36,7 @@ Depends: libjs-jquery,
          ${misc:Depends},
          ${shlibs:Depends},
 Recommends: golang-doc,
-Built-Using: ${misc:Built-Using},
+Static-Built-Using: ${misc:Static-Built-Using},
 Description: supplementary Go tools
  This subrepository holds the source for various packages and tools that
  support the Go programming language.
@@ -49,14 +50,12 @@ Description: supplementary Go tools
 
 Package: golang-golang-x-tools-dev
 Architecture: all
-Depends: golang-github-yuin-goldmark-dev (>= 1.1.27),
-         golang-golang-x-mod-dev (>= 0.2.0),
-         golang-golang-x-net-dev (>= 1:0.0+git20200226.0de0cce),
-         golang-golang-x-sync-dev (>= 0.0~git20190911.cd5d95a),
-         golang-golang-x-sys-dev (>= 0.0~git20210124.22da62e),
-         golang-golang-x-xerrors-dev (>= 0.0~git20191204.9bdfabe),
+Multi-Arch: foreign
+Depends: golang-github-yuin-goldmark-dev (>= 1.4.13),
+         golang-golang-x-mod-dev (>= 0.6.0),
+         golang-golang-x-net-dev (>= 1:0.1.0),
+         golang-golang-x-sys-dev (>= 0.1.0),
          ${misc:Depends},
-         ${shlibs:Depends},
 Description: supplementary Go tools (development files)
  This subrepository holds the source for various packages and tools that
  support the Go programming language.
@@ -74,7 +73,7 @@ Package: gopls
 Architecture: any
 Depends: ${misc:Depends},
          ${shlibs:Depends},
-Built-Using: ${misc:Built-Using},
+Static-Built-Using: ${misc:Static-Built-Using},
 Breaks: golang-golang-x-tools (<< 1:0.0~git20201116.6f6c72a+ds-3),
 Replaces: golang-golang-x-tools (<< 1:0.0~git20201116.6f6c72a+ds-3),
 Description: language server for the Go language

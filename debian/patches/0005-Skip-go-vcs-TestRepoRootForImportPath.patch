@@ -1,0 +1,24 @@
+From: James Page <james.page@ubuntu.com>
+Date: Tue, 17 Nov 2020 02:14:58 +0800
+Subject: Skip go/vcs TestRepoRootForImportPath
+
+Forwarded: not-needed
+
+Some tests rely on access to online resources; skip
+these as this does not work in offline build environments.
+---
+ go/vcs/vcs_test.go | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/go/vcs/vcs_test.go b/go/vcs/vcs_test.go
+index a17b50d..35198cd 100644
+--- a/go/vcs/vcs_test.go
++++ b/go/vcs/vcs_test.go
+@@ -19,6 +19,7 @@ import (
+ // Test that RepoRootForImportPath creates the correct RepoRoot for a given importPath.
+ // TODO(cmang): Add tests for SVN and BZR.
+ func TestRepoRootForImportPath(t *testing.T) {
++	t.Skip("Skipping test in offline build environment")
+ 	if runtime.GOOS == "android" {
+ 		t.Skipf("incomplete source tree on %s", runtime.GOOS)
+ 	}

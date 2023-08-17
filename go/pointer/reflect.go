@@ -1024,7 +1024,7 @@ func ext۰reflect۰ChanOf(a *analysis, cgn *cgnode) {
 	var dir reflect.ChanDir // unknown
 	if site := cgn.callersite; site != nil {
 		if c, ok := site.instr.Common().Args[0].(*ssa.Const); ok {
-			v, _ := constant.Int64Val(c.Value)
+			v := c.Int64()
 			if 0 <= v && v <= int64(reflect.BothDir) {
 				dir = reflect.ChanDir(v)
 			}
@@ -1751,8 +1751,7 @@ func ext۰reflect۰rtype۰InOut(a *analysis, cgn *cgnode, out bool) {
 	index := -1
 	if site := cgn.callersite; site != nil {
 		if c, ok := site.instr.Common().Args[0].(*ssa.Const); ok {
-			v, _ := constant.Int64Val(c.Value)
-			index = int(v)
+			index = int(c.Int64())
 		}
 	}
 	a.addConstraint(&rtypeInOutConstraint{
@@ -1943,14 +1942,13 @@ func ext۰reflect۰rtype۰Method(a *analysis, cgn *cgnode) {
 // types they create to ensure termination of the algorithm in cases
 // where the output of a type constructor flows to its input, e.g.
 //
-// 	func f(t reflect.Type) {
-// 		f(reflect.PtrTo(t))
-// 	}
+//	func f(t reflect.Type) {
+//		f(reflect.PtrTo(t))
+//	}
 //
 // It does this by limiting the type height to k, but this still leaves
 // a potentially exponential (4^k) number of of types that may be
 // enumerated in pathological cases.
-//
 func typeHeight(T types.Type) int {
 	switch T := T.(type) {
 	case *types.Chan:

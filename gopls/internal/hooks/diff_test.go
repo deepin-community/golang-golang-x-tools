@@ -2,15 +2,32 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package hooks_test
+package hooks
 
 import (
+	"io/ioutil"
+	"os"
 	"testing"
 
-	"golang.org/x/tools/gopls/internal/hooks"
-	"golang.org/x/tools/internal/lsp/diff/difftest"
+	"golang.org/x/tools/internal/diff/difftest"
 )
 
 func TestDiff(t *testing.T) {
-	difftest.DiffTest(t, hooks.ComputeEdits)
+	difftest.DiffTest(t, ComputeEdits)
+}
+
+func TestDisaster(t *testing.T) {
+	a := "This is a string,(\u0995) just for basic\nfunctionality"
+	b := "This is another string, (\u0996) to see if disaster will store stuff correctly"
+	fname := disaster(a, b)
+	buf, err := ioutil.ReadFile(fname)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(buf) != a+"\x00"+b {
+		t.Error("failed to record original strings")
+	}
+	if err := os.Remove(fname); err != nil {
+		t.Error(err)
+	}
 }

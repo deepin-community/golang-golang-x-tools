@@ -6,12 +6,10 @@ package misc
 import (
 	"testing"
 
-	. "golang.org/x/tools/internal/lsp/regtest"
-	"golang.org/x/tools/internal/testenv"
+	. "golang.org/x/tools/gopls/internal/lsp/regtest"
 )
 
 func TestMissingPatternDiagnostic(t *testing.T) {
-	testenv.NeedsGo1Point(t, 16)
 	const files = `
 -- go.mod --
 module example.com

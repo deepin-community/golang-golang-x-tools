@@ -41,8 +41,8 @@ const builtinPkgPath = "builtin"
 // FuncMap defines template functions used in godoc templates.
 //
 // Convention: template function names ending in "_html" or "_url" produce
-//             HTML- or URL-escaped strings; all other function results may
-//             require explicit escaping in the template.
+// HTML- or URL-escaped strings; all other function results may
+// require explicit escaping in the template.
 func (p *Presentation) FuncMap() template.FuncMap {
 	p.initFuncMapOnce.Do(p.initFuncMap)
 	return p.funcMap
@@ -345,11 +345,16 @@ func isDigit(ch rune) bool {
 	return '0' <= ch && ch <= '9' || ch >= utf8.RuneSelf && unicode.IsDigit(ch)
 }
 
-func comment_htmlFunc(comment string) string {
+func comment_htmlFunc(info *PageInfo, comment string) string {
 	var buf bytes.Buffer
 	// TODO(gri) Provide list of words (e.g. function parameters)
 	//           to be emphasized by ToHTML.
-	doc.ToHTML(&buf, comment, nil) // does html-escaping
+
+	// godocToHTML is:
+	// - buf.Write(info.PDoc.HTML(comment)) on go1.19
+	// - go/doc.ToHTML(&buf, comment, nil) on other versions
+	godocToHTML(&buf, info.PDoc, comment)
+
 	return buf.String()
 }
 
@@ -448,7 +453,7 @@ func srcToPkgLinkFunc(relpath string) string {
 	return fmt.Sprintf(`<a href="/%s">%s</a>`, relpath, relpath[len("pkg/"):])
 }
 
-// srcBreadcrumbFun converts each segment of relpath to a HTML <a>.
+// srcBreadcrumbFunc converts each segment of relpath to a HTML <a>.
 // Each segment links to its corresponding src directories.
 func srcBreadcrumbFunc(relpath string) string {
 	segments := strings.Split(relpath, "/")
@@ -658,7 +663,7 @@ func (p *Presentation) example_suffixFunc(name string) string {
 	return suffix
 }
 
-// implements_html returns the "> Implements" toggle for a package-level named type.
+// implements_htmlFunc returns the "> Implements" toggle for a package-level named type.
 // Its contents are populated from JSON data by client-side JS at load time.
 func (p *Presentation) implements_htmlFunc(info *PageInfo, typeName string) string {
 	if p.ImplementsHTML == nil {
@@ -676,7 +681,7 @@ func (p *Presentation) implements_htmlFunc(info *PageInfo, typeName string) stri
 	return buf.String()
 }
 
-// methodset_html returns the "> Method set" toggle for a package-level named type.
+// methodset_htmlFunc returns the "> Method set" toggle for a package-level named type.
 // Its contents are populated from JSON data by client-side JS at load time.
 func (p *Presentation) methodset_htmlFunc(info *PageInfo, typeName string) string {
 	if p.MethodSetHTML == nil {
@@ -694,7 +699,7 @@ func (p *Presentation) methodset_htmlFunc(info *PageInfo, typeName string) strin
 	return buf.String()
 }
 
-// callgraph_html returns the "> Call graph" toggle for a package-level func.
+// callgraph_htmlFunc returns the "> Call graph" toggle for a package-level func.
 // Its contents are populated from JSON data by client-side JS at load time.
 func (p *Presentation) callgraph_htmlFunc(info *PageInfo, recv, name string) string {
 	if p.CallGraphHTML == nil {

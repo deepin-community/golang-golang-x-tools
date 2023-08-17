@@ -6,6 +6,8 @@
 // only static call edges.
 package static // import "golang.org/x/tools/go/callgraph/static"
 
+// TODO(zpavlinovic): update static for how it handles generic function bodies.
+
 import (
 	"golang.org/x/tools/go/callgraph"
 	"golang.org/x/tools/go/ssa"
@@ -14,7 +16,6 @@ import (
 
 // CallGraph computes the call graph of the specified program
 // considering only static calls.
-//
 func CallGraph(prog *ssa.Program) *callgraph.Graph {
 	cg := callgraph.New(nil) // TODO(adonovan) eliminate concept of rooted callgraph
 

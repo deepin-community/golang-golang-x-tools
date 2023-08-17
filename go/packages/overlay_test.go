@@ -109,8 +109,6 @@ func TestOverlayChangesTestPackageName(t *testing.T) {
 	testAllOrModulesParallel(t, testOverlayChangesTestPackageName)
 }
 func testOverlayChangesTestPackageName(t *testing.T, exporter packagestest.Exporter) {
-	testenv.NeedsGo1Point(t, 16)
-
 	exported := packagestest.Export(t, exporter, []packagestest.Module{{
 		Name: "fake",
 		Files: map[string]interface{}{
@@ -717,8 +715,6 @@ func TestInvalidFilesBeforeOverlay(t *testing.T) {
 }
 
 func testInvalidFilesBeforeOverlay(t *testing.T, exporter packagestest.Exporter) {
-	testenv.NeedsGo1Point(t, 15)
-
 	exported := packagestest.Export(t, exporter, []packagestest.Module{
 		{
 			Name: "golang.org/fake",
@@ -756,8 +752,6 @@ func TestInvalidFilesBeforeOverlayContains(t *testing.T) {
 	testAllOrModulesParallel(t, testInvalidFilesBeforeOverlayContains)
 }
 func testInvalidFilesBeforeOverlayContains(t *testing.T, exporter packagestest.Exporter) {
-	testenv.NeedsGo1Point(t, 15)
-
 	exported := packagestest.Export(t, exporter, []packagestest.Module{
 		{
 			Name: "golang.org/fake",
@@ -1046,6 +1040,7 @@ func Hi() {
 // This does not use go/packagestest because it needs to write a replace
 // directive with an absolute path in one of the module's go.mod files.
 func TestOverlaysInReplace(t *testing.T) {
+	testenv.NeedsGoPackages(t)
 	t.Parallel()
 
 	// Create module b.com in a temporary directory. Do not add any Go files

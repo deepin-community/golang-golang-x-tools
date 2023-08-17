@@ -51,6 +51,10 @@ type errorTest5 int
 func (errorTest5) error() { // niladic; don't complain if no args (was bug)
 }
 
+type errorTestOK int
+
+func (errorTestOK) Error() string { return "" }
+
 // This function never executes, but it serves as a simple test for the program.
 // Test with make test.
 func PrintfTests() {
@@ -149,6 +153,7 @@ func PrintfTests() {
 	fmt.Println("%s", "hi")                     // want "fmt.Println call has possible formatting directive %s"
 	fmt.Println("%v", "hi")                     // want "fmt.Println call has possible formatting directive %v"
 	fmt.Println("%T", "hi")                     // want "fmt.Println call has possible formatting directive %T"
+	fmt.Println("%s"+" there", "hi")            // want "fmt.Println call has possible formatting directive %s"
 	fmt.Println("0.0%")                         // correct (trailing % couldn't be a formatting directive)
 	fmt.Printf("%s", "hi", 3)                   // want "fmt.Printf call needs 1 arg but has 2 args"
 	_ = fmt.Sprintf("%"+("s"), "hi", 3)         // want "fmt.Sprintf call needs 1 arg but has 2 args"
@@ -212,6 +217,7 @@ func PrintfTests() {
 	Printf("%[2]*.[1]*[3]d x", 2, "hi", 4) // want `a.Printf format %\[2]\*\.\[1\]\*\[3\]d uses non-int \x22hi\x22 as argument of \*`
 	Printf("%[0]s x", "arg1")              // want `a.Printf format has invalid argument index \[0\]`
 	Printf("%[0]d x", 1)                   // want `a.Printf format has invalid argument index \[0\]`
+	Printf("%[3]*.[2*[1]f", 1, 2, 3)       // want `a.Printf format has invalid argument index \[2\*\[1\]`
 	// Something that satisfies the error interface.
 	var e error
 	fmt.Println(e.Error()) // ok
@@ -327,12 +333,19 @@ func PrintfTests() {
 	dbg("", 1) // no error "call has arguments but no formatting directive"
 
 	// %w
+	var errSubset interface {
+		Error() string
+		A()
+	}
 	_ = fmt.Errorf("%w", err)               // OK
 	_ = fmt.Errorf("%#w", err)              // OK
 	_ = fmt.Errorf("%[2]w %[1]s", "x", err) // OK
 	_ = fmt.Errorf("%[2]w %[1]s", e, "x")   // want `fmt.Errorf format %\[2\]w has arg "x" of wrong type string`
 	_ = fmt.Errorf("%w", "x")               // want `fmt.Errorf format %w has arg "x" of wrong type string`
-	_ = fmt.Errorf("%w %w", err, err)       // want `fmt.Errorf call has more than one error-wrapping directive %w`
+	_ = fmt.Errorf("%w %w", err, err)       // OK
+	_ = fmt.Errorf("%w", interface{}(nil))  // want `fmt.Errorf format %w has arg interface{}\(nil\) of wrong type interface{}`
+	_ = fmt.Errorf("%w", errorTestOK(0))    // concrete value implements error
+	_ = fmt.Errorf("%w", errSubset)         // interface value implements error
 	fmt.Printf("%w", err)                   // want `fmt.Printf does not support error-wrapping directive %w`
 	var wt *testing.T
 	wt.Errorf("%w", err)          // want `\(\*testing.common\).Errorf does not support error-wrapping directive %w`
@@ -686,6 +699,7 @@ type unexportedInterface struct {
 type unexportedStringer struct {
 	t ptrStringer
 }
+
 type unexportedStringerOtherFields struct {
 	s string
 	t ptrStringer
@@ -696,6 +710,7 @@ type unexportedStringerOtherFields struct {
 type unexportedError struct {
 	e error
 }
+
 type unexportedErrorOtherFields struct {
 	s string
 	e error
@@ -757,9 +772,10 @@ func UnexportedStringerOrError() {
 	fmt.Printf("%s", uei)       // want "Printf format %s has arg uei of wrong type a.unexportedErrorInterface"
 	fmt.Println("foo\n", "bar") // not an error
 
-	fmt.Println("foo\n")  // want "Println arg list ends with redundant newline"
-	fmt.Println("foo\\n") // not an error
-	fmt.Println(`foo\n`)  // not an error
+	fmt.Println("foo\n")      // want "Println arg list ends with redundant newline"
+	fmt.Println("foo" + "\n") // want "Println arg list ends with redundant newline"
+	fmt.Println("foo\\n")     // not an error
+	fmt.Println(`foo\n`)      // not an error
 
 	intSlice := []int{3, 4}
 	fmt.Printf("%s", intSlice) // want `fmt.Printf format %s has arg intSlice of wrong type \[\]int`

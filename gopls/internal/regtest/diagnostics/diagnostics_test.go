@@ -11,15 +11,16 @@ import (
 	"testing"
 
 	"golang.org/x/tools/gopls/internal/hooks"
-	. "golang.org/x/tools/internal/lsp/regtest"
-
-	"golang.org/x/tools/internal/lsp"
-	"golang.org/x/tools/internal/lsp/fake"
-	"golang.org/x/tools/internal/lsp/protocol"
+	"golang.org/x/tools/gopls/internal/lsp"
+	"golang.org/x/tools/gopls/internal/lsp/fake"
+	"golang.org/x/tools/gopls/internal/lsp/protocol"
+	. "golang.org/x/tools/gopls/internal/lsp/regtest"
+	"golang.org/x/tools/internal/bug"
 	"golang.org/x/tools/internal/testenv"
 )
 
 func TestMain(m *testing.M) {
+	bug.PanicOnBugs = true
 	Main(m, hooks.Options)
 }
 
@@ -296,7 +297,7 @@ func Hello() {
 
 	t.Run("without workspace module", func(t *testing.T) {
 		WithOptions(
-			Modes(Singleton),
+			Modes(Default),
 		).Run(t, noMod, func(t *testing.T, env *Env) {
 			env.Await(
 				env.DiagnosticAtRegexp("main.go", `"mod.com/bob"`),
@@ -382,7 +383,7 @@ func main() {}
 			// completed.
 			OnceMet(
 				env.DoneWithChange(),
-				NoDiagnostics("a.go"),
+				EmptyDiagnostics("a.go"),
 			),
 		)
 	})
@@ -469,12 +470,11 @@ func _() {
 }
 `
 	WithOptions(
-		EditorConfig{
-			Env: map[string]string{
-				"GOPATH":      "",
-				"GO111MODULE": "off",
-			},
-		}).Run(t, files, func(t *testing.T, env *Env) {
+		EnvVars{
+			"GOPATH":      "",
+			"GO111MODULE": "off",
+		},
+	).Run(t, files, func(t *testing.T, env *Env) {
 		env.OpenFile("main.go")
 		env.Await(env.DiagnosticAtRegexp("main.go", "fmt"))
 		env.SaveBuffer("main.go")
@@ -498,8 +498,9 @@ package x
 
 var X = 0
 `
-	editorConfig := EditorConfig{Env: map[string]string{"GOFLAGS": "-tags=foo"}}
-	WithOptions(editorConfig).Run(t, files, func(t *testing.T, env *Env) {
+	WithOptions(
+		EnvVars{"GOFLAGS": "-tags=foo"},
+	).Run(t, files, func(t *testing.T, env *Env) {
 		env.OpenFile("main.go")
 		env.OrganizeImports("main.go")
 		env.Await(EmptyDiagnostics("main.go"))
@@ -541,7 +542,7 @@ func _() {
 
 // Expect a module/GOPATH error if there is an error in the file at startup.
 // Tests golang/go#37279.
-func TestShowCriticalError_Issue37279(t *testing.T) {
+func TestBrokenWorkspace_OutsideModule(t *testing.T) {
 	const noModule = `
 -- a.go --
 package foo
@@ -555,8 +556,10 @@ func f() {
 	Run(t, noModule, func(t *testing.T, env *Env) {
 		env.OpenFile("a.go")
 		env.Await(
+			// Expect the adHocPackagesWarning.
 			OutstandingWork(lsp.WorkspaceLoadFailure, "outside of a module"),
 		)
+		// Deleting the import dismisses the warning.
 		env.RegexpReplace("a.go", `import "mod.com/hello"`, "")
 		env.Await(
 			NoOutstandingWork(),
@@ -571,9 +574,9 @@ hi mom
 `
 	for _, go111module := range []string{"on", "off", ""} {
 		t.Run(fmt.Sprintf("GO111MODULE_%v", go111module), func(t *testing.T) {
-			WithOptions(EditorConfig{
-				Env: map[string]string{"GO111MODULE": go111module},
-			}).Run(t, files, func(t *testing.T, env *Env) {
+			WithOptions(
+				EnvVars{"GO111MODULE": go111module},
+			).Run(t, files, func(t *testing.T, env *Env) {
 				env.Await(
 					NoOutstandingWork(),
 				)
@@ -603,11 +606,7 @@ func main() {
 `
 	WithOptions(
 		InGOPATH(),
-		EditorConfig{
-			Env: map[string]string{
-				"GO111MODULE": "off",
-			},
-		},
+		EnvVars{"GO111MODULE": "off"},
 	).Run(t, collision, func(t *testing.T, env *Env) {
 		env.OpenFile("x/x.go")
 		env.Await(
@@ -620,7 +619,7 @@ func main() {
 			env.RegexpReplace("x/x.go", `package x`, `package main`)
 			env.Await(OnceMet(
 				env.DoneWithChange(),
-				env.DiagnosticAtRegexpWithMessage("x/main.go", `fmt`, "undeclared name")))
+				env.DiagnosticAtRegexp("x/main.go", `fmt`)))
 		}
 	})
 }
@@ -638,7 +637,6 @@ var ErrHelpWanted error
 
 // Test for golang/go#38211.
 func Test_Issue38211(t *testing.T) {
-	testenv.NeedsGo1Point(t, 14)
 	const ardanLabs = `
 -- go.mod --
 module mod.com
@@ -703,7 +701,6 @@ func main() {
 
 // Test for golang/go#38207.
 func TestNewModule_Issue38207(t *testing.T) {
-	testenv.NeedsGo1Point(t, 14)
 	const emptyFile = `
 -- go.mod --
 module mod.com
@@ -739,7 +736,6 @@ func main() {
 
 // Test for golang/go#36960.
 func TestNewFileBadImports_Issue36960(t *testing.T) {
-	testenv.NeedsGo1Point(t, 14)
 	const simplePackage = `
 -- go.mod --
 module mod.com
@@ -758,15 +754,20 @@ func _() {
 		env.OpenFile("a/a1.go")
 		env.CreateBuffer("a/a2.go", ``)
 		env.SaveBufferWithoutActions("a/a2.go")
+		// We can't use OnceMet here (at least, not easily) because the didSave
+		// races with the didChangeWatchedFiles.
+		//
+		// TODO(rfindley): add an AllOf expectation combinator, or an expectation
+		// that all notifications have been processed.
 		env.Await(
-			OnceMet(
-				env.DoneWithSave(),
-				NoDiagnostics("a/a1.go"),
-			),
+			EmptyDiagnostics("a/a1.go"),
 		)
 		env.EditBuffer("a/a2.go", fake.NewEdit(0, 0, 0, 0, `package a`))
 		env.Await(
-			OnceMet(env.DoneWithChange(), NoDiagnostics("a/a1.go")),
+			OnceMet(
+				env.DoneWithChange(),
+				EmptyDiagnostics("a/a1.go"),
+			),
 		)
 	})
 }
@@ -774,9 +775,6 @@ func _() {
 // This test tries to replicate the workflow of a user creating a new x test.
 // It also tests golang/go#39315.
 func TestManuallyCreatingXTest(t *testing.T) {
-	// Only for 1.15 because of golang/go#37971.
-	testenv.NeedsGo1Point(t, 15)
-
 	// Create a package that already has a test variant (in-package test).
 	const testVariant = `
 -- go.mod --
@@ -844,8 +842,6 @@ func TestHello(t *testing.T) {
 
 // Reproduce golang/go#40690.
 func TestCreateOnlyXTest(t *testing.T) {
-	testenv.NeedsGo1Point(t, 13)
-
 	const mod = `
 -- go.mod --
 module mod.com
@@ -874,8 +870,6 @@ func TestX(t *testing.T) {
 }
 
 func TestChangePackageName(t *testing.T) {
-	t.Skip("This issue hasn't been fixed yet. See golang.org/issue/41061.")
-
 	const mod = `
 -- go.mod --
 module mod.com
@@ -889,15 +883,11 @@ package foo_
 	Run(t, mod, func(t *testing.T, env *Env) {
 		env.OpenFile("foo/bar_test.go")
 		env.RegexpReplace("foo/bar_test.go", "package foo_", "package foo_test")
-		env.SaveBuffer("foo/bar_test.go")
 		env.Await(
 			OnceMet(
-				env.DoneWithSave(),
-				NoDiagnostics("foo/bar_test.go"),
-			),
-			OnceMet(
-				env.DoneWithSave(),
-				NoDiagnostics("foo/foo.go"),
+				env.DoneWithChange(),
+				EmptyOrNoDiagnostics("foo/bar_test.go"),
+				EmptyOrNoDiagnostics("foo/foo.go"),
 			),
 		)
 	})
@@ -919,7 +909,7 @@ var _ = foo.Bar
 		env.Await(
 			OnceMet(
 				env.DoneWithOpen(),
-				NoDiagnostics("_foo/x.go"),
+				EmptyDiagnostics("_foo/x.go"),
 			))
 	})
 }
@@ -967,8 +957,6 @@ const C = a.A
 // This is a copy of the scenario_default/quickfix_empty_files.txt test from
 // govim. Reproduces golang/go#39646.
 func TestQuickFixEmptyFiles(t *testing.T) {
-	testenv.NeedsGo1Point(t, 15)
-
 	const mod = `
 -- go.mod --
 module mod.com
@@ -1094,8 +1082,6 @@ func Foo() {
 }
 `
 	Run(t, basic, func(t *testing.T, env *Env) {
-		testenv.NeedsGo1Point(t, 16) // We can't recover cleanly from this case without good overlay support.
-
 		env.WriteWorkspaceFile("foo/foo_test.go", `package main
 
 func main() {
@@ -1182,8 +1168,6 @@ func main() {
 
 // Reproduces golang/go#39763.
 func TestInvalidPackageName(t *testing.T) {
-	testenv.NeedsGo1Point(t, 15)
-
 	const pkgDefault = `
 -- go.mod --
 module mod.com
@@ -1230,7 +1214,7 @@ func main() {
 	})
 	WithOptions(
 		WorkspaceFolders("a"),
-		LimitWorkspaceScope(),
+		Settings{"expandWorkspaceToModule": false},
 	).Run(t, mod, func(t *testing.T, env *Env) {
 		env.OpenFile("a/main.go")
 		env.Await(
@@ -1261,7 +1245,7 @@ func main() {
 `
 
 	WithOptions(
-		EditorConfig{EnableStaticcheck: true},
+		Settings{"staticcheck": true},
 	).Run(t, files, func(t *testing.T, env *Env) {
 		env.OpenFile("main.go")
 		var d protocol.PublishDiagnosticsParams
@@ -1296,7 +1280,7 @@ func main() {}
 	Run(t, dir, func(t *testing.T, env *Env) {
 		env.OpenFile("main.go")
 		env.OpenFile("other.go")
-		x := env.DiagnosticsFor("main.go")
+		x := env.Awaiter.DiagnosticsFor("main.go")
 		if x == nil {
 			t.Fatalf("expected 1 diagnostic, got none")
 		}
@@ -1304,7 +1288,7 @@ func main() {}
 			t.Fatalf("main.go, got %d diagnostics, expected 1", len(x.Diagnostics))
 		}
 		keep := x.Diagnostics[0]
-		y := env.DiagnosticsFor("other.go")
+		y := env.Awaiter.DiagnosticsFor("other.go")
 		if len(y.Diagnostics) != 1 {
 			t.Fatalf("other.go: got %d diagnostics, expected 1", len(y.Diagnostics))
 		}
@@ -1320,9 +1304,6 @@ func main() {}
 }
 
 func TestNotifyOrphanedFiles(t *testing.T) {
-	// Need GO111MODULE=on for this test to work with Go 1.12.
-	testenv.NeedsGo1Point(t, 13)
-
 	const files = `
 -- go.mod --
 module mod.com
@@ -1334,8 +1315,8 @@ package a
 func main() {
 	var x int
 }
--- a/a_ignore.go --
-// +build ignore
+-- a/a_exclude.go --
+// +build exclude
 
 package a
 
@@ -1348,14 +1329,18 @@ func _() {
 		env.Await(
 			env.DiagnosticAtRegexp("a/a.go", "x"),
 		)
-		env.OpenFile("a/a_ignore.go")
+		env.OpenFile("a/a_exclude.go")
 		env.Await(
-			DiagnosticAt("a/a_ignore.go", 2, 8),
+			DiagnosticAt("a/a_exclude.go", 2, 8),
 		)
 	})
 }
 
 func TestEnableAllExperiments(t *testing.T) {
+	// Before the oldest supported Go version, gopls sends a warning to upgrade
+	// Go, which fails the expectation below.
+	testenv.NeedsGo1Point(t, lsp.OldestSupportedGoVersion())
+
 	const mod = `
 -- go.mod --
 module mod.com
@@ -1371,12 +1356,15 @@ func b(c bytes.Buffer) {
 }
 `
 	WithOptions(
-		EditorConfig{
-			AllExperiments: true,
-		},
+		Settings{"allExperiments": true},
 	).Run(t, mod, func(t *testing.T, env *Env) {
 		// Confirm that the setting doesn't cause any warnings.
-		env.Await(NoShowMessage())
+		env.Await(
+			OnceMet(
+				InitialWorkspaceLoad,
+				NoShownMessage(""), // empty substring to match any message
+			),
+		)
 	})
 }
 
@@ -1440,8 +1428,6 @@ func main() {
 // have no more complaints about it.
 // https://github.com/golang/go/issues/41061
 func TestRenamePackage(t *testing.T) {
-	testenv.NeedsGo1Point(t, 16)
-
 	const proxy = `
 -- example.com@v1.2.3/go.mod --
 module example.com
@@ -1485,11 +1471,7 @@ package foo_
 	WithOptions(
 		ProxyFiles(proxy),
 		InGOPATH(),
-		EditorConfig{
-			Env: map[string]string{
-				"GO111MODULE": "off",
-			},
-		},
+		EnvVars{"GO111MODULE": "off"},
 	).Run(t, contents, func(t *testing.T, env *Env) {
 		// Simulate typing character by character.
 		env.OpenFile("foo/foo_test.go")
@@ -1509,8 +1491,6 @@ package foo_
 // TestProgressBarErrors confirms that critical workspace load errors are shown
 // and updated via progress reports.
 func TestProgressBarErrors(t *testing.T) {
-	testenv.NeedsGo1Point(t, 14)
-
 	const pkg = `
 -- go.mod --
 modul mod.com
@@ -1543,8 +1523,6 @@ go 1.hello
 }
 
 func TestDeleteDirectory(t *testing.T) {
-	testenv.NeedsGo1Point(t, 14)
-
 	const mod = `
 -- bob/bob.go --
 package bob
@@ -1554,7 +1532,7 @@ func Hello() {
 }
 -- go.mod --
 module mod.com
--- main.go --
+-- cmd/main.go --
 package main
 
 import "mod.com/bob"
@@ -1564,11 +1542,12 @@ func main() {
 }
 `
 	Run(t, mod, func(t *testing.T, env *Env) {
+		env.Await(FileWatchMatching("bob"))
 		env.RemoveWorkspaceFile("bob")
 		env.Await(
-			env.DiagnosticAtRegexp("main.go", `"mod.com/bob"`),
+			env.DiagnosticAtRegexp("cmd/main.go", `"mod.com/bob"`),
 			EmptyDiagnostics("bob/bob.go"),
-			RegistrationMatching("didChangeWatchedFiles"),
+			NoFileWatchMatching("bob"),
 		)
 	})
 }
@@ -1641,7 +1620,19 @@ const B = a.B
 	Run(t, mod, func(t *testing.T, env *Env) {
 		env.OpenFile("a/a.go")
 		env.OpenFile("b/b.go")
-		env.Await(env.DiagnosticAtRegexp("a/a.go", `"mod.test/b"`))
+		env.Await(
+			OnceMet(
+				env.DoneWithOpen(),
+				// The Go command sometimes tells us about only one of the import cycle
+				// errors below. For robustness of this test, succeed if we get either.
+				//
+				// TODO(golang/go#52904): we should get *both* of these errors.
+				AnyOf(
+					env.DiagnosticAtRegexpWithMessage("a/a.go", `"mod.test/b"`, "import cycle"),
+					env.DiagnosticAtRegexpWithMessage("b/b.go", `"mod.test/a"`, "import cycle"),
+				),
+			),
+		)
 		env.RegexpReplace("b/b.go", `const B = a\.B`, "")
 		env.SaveBuffer("b/b.go")
 		env.Await(
@@ -1652,8 +1643,6 @@ const B = a.B
 }
 
 func TestBadImport(t *testing.T) {
-	testenv.NeedsGo1Point(t, 14)
-
 	const mod = `
 -- go.mod --
 module mod.com
@@ -1676,72 +1665,11 @@ import (
 	t.Run("GOPATH", func(t *testing.T) {
 		WithOptions(
 			InGOPATH(),
-			EditorConfig{
-				Env: map[string]string{"GO111MODULE": "off"},
-			},
-			Modes(Singleton),
+			EnvVars{"GO111MODULE": "off"},
+			Modes(Default),
 		).Run(t, mod, func(t *testing.T, env *Env) {
 			env.Await(
 				env.DiagnosticAtRegexpWithMessage("main.go", `"nosuchpkg"`, `cannot find package "nosuchpkg" in any of`),
-			)
-		})
-	})
-}
-
-func TestMultipleModules_Warning(t *testing.T) {
-	const modules = `
--- a/go.mod --
-module a.com
-
-go 1.12
--- a/a.go --
-package a
--- b/go.mod --
-module b.com
-
-go 1.12
--- b/b.go --
-package b
-`
-	for _, go111module := range []string{"on", "auto"} {
-		t.Run("GO111MODULE="+go111module, func(t *testing.T) {
-			WithOptions(
-				Modes(Singleton),
-				EditorConfig{
-					Env: map[string]string{
-						"GO111MODULE": go111module,
-					},
-				},
-			).Run(t, modules, func(t *testing.T, env *Env) {
-				env.OpenFile("a/a.go")
-				env.OpenFile("b/go.mod")
-				env.Await(
-					env.DiagnosticAtRegexp("a/a.go", "package a"),
-					env.DiagnosticAtRegexp("b/go.mod", "module b.com"),
-					OutstandingWork(lsp.WorkspaceLoadFailure, "gopls requires a module at the root of your workspace."),
-				)
-			})
-		})
-	}
-
-	// Expect no warning if GO111MODULE=auto in a directory in GOPATH.
-	t.Run("GOPATH_GO111MODULE_auto", func(t *testing.T) {
-		WithOptions(
-			Modes(Singleton),
-			EditorConfig{
-				Env: map[string]string{
-					"GO111MODULE": "auto",
-				},
-			},
-			InGOPATH(),
-		).Run(t, modules, func(t *testing.T, env *Env) {
-			env.OpenFile("a/a.go")
-			env.Await(
-				OnceMet(
-					env.DoneWithOpen(),
-					NoDiagnostics("a/a.go"),
-				),
-				NoOutstandingWork(),
 			)
 		})
 	})
@@ -1793,7 +1721,7 @@ func helloHelper() {}
 `
 	WithOptions(
 		ProxyFiles(proxy),
-		Modes(Singleton),
+		Modes(Default),
 	).Run(t, nested, func(t *testing.T, env *Env) {
 		// Expect a diagnostic in a nested module.
 		env.OpenFile("nested/hello/hello.go")
@@ -1854,7 +1782,7 @@ var Bar = Foo
 
 	Run(t, files, func(t *testing.T, env *Env) {
 		env.OpenFile("foo.go")
-		env.Await(env.DiagnosticAtRegexpWithMessage("bar.go", `Foo`, "undeclared name"))
+		env.Await(env.DiagnosticAtRegexp("bar.go", `Foo`))
 		env.RegexpReplace("foo.go", `\+build`, "")
 		env.Await(EmptyDiagnostics("bar.go"))
 	})
@@ -1885,15 +1813,15 @@ package main
 		env.OpenFile("main.go")
 		env.OpenFile("other.go")
 		env.Await(
-			env.DiagnosticAtRegexpWithMessage("main.go", "asdf", "undeclared name"),
-			env.DiagnosticAtRegexpWithMessage("main.go", "fdas", "undeclared name"),
+			env.DiagnosticAtRegexp("main.go", "asdf"),
+			env.DiagnosticAtRegexp("main.go", "fdas"),
 		)
 		env.SetBufferContent("other.go", "package main\n\nasdf")
 		// The new diagnostic in other.go should not suppress diagnostics in main.go.
 		env.Await(
 			OnceMet(
 				env.DiagnosticAtRegexpWithMessage("other.go", "asdf", "expected declaration"),
-				env.DiagnosticAtRegexpWithMessage("main.go", "asdf", "undeclared name"),
+				env.DiagnosticAtRegexp("main.go", "asdf"),
 			),
 		)
 	})
@@ -1917,37 +1845,6 @@ package main
 			OnceMet(
 				env.DoneWithSave(),
 				NoLogMatching(protocol.Error, "initial workspace load failed"),
-			),
-		)
-	})
-}
-
-// Tests golang/go#45075: A panic in fillreturns broke diagnostics.
-// Expect an error log indicating that fillreturns panicked, as well type
-// errors for the broken code.
-func TestFillReturnsPanic(t *testing.T) {
-	// At tip, the panic no longer reproduces.
-	testenv.SkipAfterGo1Point(t, 16)
-
-	const files = `
--- go.mod --
-module mod.com
-
-go 1.15
--- main.go --
-package main
-
-func foo() int {
-	return x, nil
-}
-`
-	Run(t, files, func(t *testing.T, env *Env) {
-		env.OpenFile("main.go")
-		env.Await(
-			OnceMet(
-				env.DoneWithOpen(),
-				LogMatching(protocol.Error, `.*analysis fillreturns.*panicked.*`, 1, true),
-				env.DiagnosticAtRegexpWithMessage("main.go", `return x`, "wrong number of return values"),
 			),
 		)
 	})
@@ -1977,10 +1874,9 @@ func main() {}
 	})
 }
 
-func TestUseOfInvalidMetadata(t *testing.T) {
-	testenv.NeedsGo1Point(t, 13)
-
-	const mod = `
+func TestLangVersion(t *testing.T) {
+	testenv.NeedsGo1Point(t, 18) // Requires types.Config.GoVersion, new in 1.18.
+	const files = `
 -- go.mod --
 module mod.com
 
@@ -1988,148 +1884,221 @@ go 1.12
 -- main.go --
 package main
 
-import (
-	"mod.com/a"
-	//"os"
-)
-
-func _() {
-	a.Hello()
-	os.Getenv("")
-	//var x int
-}
--- a/a.go --
-package a
-
-func Hello() {}
+const C = 0b10
 `
-	WithOptions(
-		EditorConfig{
-			ExperimentalUseInvalidMetadata: true,
-		},
-		Modes(Singleton),
-	).Run(t, mod, func(t *testing.T, env *Env) {
-		env.OpenFile("go.mod")
-		env.RegexpReplace("go.mod", "module mod.com", "modul mod.com") // break the go.mod file
-		env.SaveBufferWithoutActions("go.mod")
+	Run(t, files, func(t *testing.T, env *Env) {
+		env.Await(env.DiagnosticAtRegexpWithMessage("main.go", `0b10`, "go1.13 or later"))
+		env.WriteWorkspaceFile("go.mod", "module mod.com \n\ngo 1.13\n")
+		env.Await(EmptyDiagnostics("main.go"))
+	})
+}
+
+func TestNoQuickFixForUndeclaredConstraint(t *testing.T) {
+	testenv.NeedsGo1Point(t, 18)
+	const files = `
+-- go.mod --
+module mod.com
+
+go 1.18
+-- main.go --
+package main
+
+func F[T C](_ T) {
+}
+`
+
+	Run(t, files, func(t *testing.T, env *Env) {
+		var d protocol.PublishDiagnosticsParams
 		env.Await(
-			env.DiagnosticAtRegexp("go.mod", "modul"),
+			OnceMet(
+				env.DiagnosticAtRegexp("main.go", `C`),
+				ReadDiagnostics("main.go", &d),
+			),
 		)
-		// Confirm that language features work with invalid metadata.
-		env.OpenFile("main.go")
-		file, pos := env.GoToDefinition("main.go", env.RegexpSearch("main.go", "Hello"))
-		wantPos := env.RegexpSearch("a/a.go", "Hello")
-		if file != "a/a.go" && pos != wantPos {
-			t.Fatalf("expected a/a.go:%s, got %s:%s", wantPos, file, pos)
+		if fixes := env.GetQuickFixes("main.go", d.Diagnostics); len(fixes) != 0 {
+			t.Errorf("got quick fixes %v, wanted none", fixes)
 		}
-		// Confirm that new diagnostics appear with invalid metadata by adding
-		// an unused variable to the body of the function.
-		env.RegexpReplace("main.go", "//var x int", "var x int")
+	})
+}
+
+func TestEditGoDirective(t *testing.T) {
+	testenv.NeedsGo1Point(t, 18)
+	const files = `
+-- go.mod --
+module mod.com
+
+go 1.16
+-- main.go --
+package main
+
+func F[T any](_ T) {
+}
+`
+	Run(t, files, func(_ *testing.T, env *Env) { // Create a new workspace-level directory and empty file.
+		var d protocol.PublishDiagnosticsParams
 		env.Await(
-			env.DiagnosticAtRegexp("main.go", "x"),
+			OnceMet(
+				env.DiagnosticAtRegexpWithMessage("main.go", `T any`, "type parameter"),
+				ReadDiagnostics("main.go", &d),
+			),
 		)
-		// Add an import and confirm that we get a diagnostic for it, since the
-		// metadata will not have been updated.
-		env.RegexpReplace("main.go", "//\"os\"", "\"os\"")
+
+		env.ApplyQuickFixes("main.go", d.Diagnostics)
+
 		env.Await(
-			env.DiagnosticAtRegexp("main.go", `"os"`),
-		)
-		// Fix the go.mod file and expect the diagnostic to resolve itself.
-		env.RegexpReplace("go.mod", "modul mod.com", "module mod.com")
-		env.SaveBuffer("go.mod")
-		env.Await(
-			env.DiagnosticAtRegexp("main.go", "x"),
-			env.NoDiagnosticAtRegexp("main.go", `"os"`),
-			EmptyDiagnostics("go.mod"),
+			EmptyDiagnostics("main.go"),
 		)
 	})
 }
 
-func TestReloadInvalidMetadata(t *testing.T) {
-	// We only use invalid metadata for Go versions > 1.12.
-	testenv.NeedsGo1Point(t, 13)
-
-	const mod = `
+func TestEditGoDirectiveWorkspace(t *testing.T) {
+	testenv.NeedsGo1Point(t, 18)
+	const files = `
 -- go.mod --
 module mod.com
 
-go 1.12
+go 1.16
+-- go.work --
+go 1.18
+
+use .
 -- main.go --
 package main
 
-func _() {}
+func F[T any](_ T) {
+}
 `
-	WithOptions(
-		EditorConfig{
-			ExperimentalUseInvalidMetadata: true,
-		},
-		// ExperimentalWorkspaceModule has a different failure mode for this
-		// case.
-		Modes(Singleton),
-	).Run(t, mod, func(t *testing.T, env *Env) {
+	Run(t, files, func(_ *testing.T, env *Env) { // Create a new workspace-level directory and empty file.
+		var d protocol.PublishDiagnosticsParams
+
+		// Once the initial workspace load is complete, we should have a diagnostic
+		// because generics are not supported at 1.16.
 		env.Await(
 			OnceMet(
 				InitialWorkspaceLoad,
-				CompletedWork("Load", 1, false),
+				env.DiagnosticAtRegexpWithMessage("main.go", `T any`, "type parameter"),
+				ReadDiagnostics("main.go", &d),
 			),
 		)
 
-		// Break the go.mod file on disk, expecting a reload.
-		env.WriteWorkspaceFile("go.mod", `modul mod.com
+		// This diagnostic should have a quick fix to edit the go version.
+		env.ApplyQuickFixes("main.go", d.Diagnostics)
 
-go 1.12
-`)
+		// Once the edit is applied, the problematic diagnostics should be
+		// resolved.
 		env.Await(
 			OnceMet(
-				env.DoneWithChangeWatchedFiles(),
-				env.DiagnosticAtRegexp("go.mod", "modul"),
-				CompletedWork("Load", 1, false),
+				env.DoneWithChangeWatchedFiles(), // go.mod should have been quick-fixed
+				EmptyDiagnostics("main.go"),
 			),
 		)
-
-		env.OpenFile("main.go")
-		env.Await(env.DoneWithOpen())
-		// The first edit after the go.mod file invalidation should cause a reload.
-		// Any subsequent simple edits should not.
-		content := `package main
-
-func main() {
-	_ = 1
+	})
 }
-`
-		env.EditBuffer("main.go", fake.NewEdit(0, 0, 3, 0, content))
-		env.Await(
-			OnceMet(
-				env.DoneWithChange(),
-				CompletedWork("Load", 2, false),
-				NoLogMatching(protocol.Error, "error loading file"),
-			),
-		)
-		env.RegexpReplace("main.go", "_ = 1", "_ = 2")
-		env.Await(
-			OnceMet(
-				env.DoneWithChange(),
-				CompletedWork("Load", 2, false),
-				NoLogMatching(protocol.Error, "error loading file"),
-			),
-		)
-		// Add an import to the main.go file and confirm that it does get
-		// reloaded, but the reload fails, so we see a diagnostic on the new
-		// "fmt" import.
-		env.EditBuffer("main.go", fake.NewEdit(0, 0, 5, 0, `package main
+
+// This test demonstrates that analysis facts are correctly propagated
+// across packages.
+func TestInterpackageAnalysis(t *testing.T) {
+	const src = `
+-- go.mod --
+module example.com
+-- a/a.go --
+package a
+
+import "example.com/b"
+
+func _() {
+	new(b.B).Printf("%d", "s") // printf error
+}
+
+-- b/b.go --
+package b
+
+import "example.com/c"
+
+type B struct{}
+
+func (B) Printf(format string, args ...interface{}) {
+	c.MyPrintf(format, args...)
+}
+
+-- c/c.go --
+package c
 
 import "fmt"
 
-func main() {
-	fmt.Println("")
+func MyPrintf(format string, args ...interface{}) {
+	fmt.Printf(format, args...)
 }
-`))
-		env.Await(
-			OnceMet(
-				env.DoneWithChange(),
-				env.DiagnosticAtRegexp("main.go", `"fmt"`),
-				CompletedWork("Load", 3, false),
-			),
-		)
+`
+	Run(t, src, func(t *testing.T, env *Env) {
+		env.OpenFile("a/a.go")
+		env.AfterChange(
+			env.DiagnosticAtRegexpWithMessage("a/a.go", "new.*Printf",
+				"format %d has arg \"s\" of wrong type string"))
+	})
+}
+
+// This test ensures that only Analyzers with RunDespiteErrors=true
+// are invoked on a package that would not compile, even if the errors
+// are distant and localized.
+func TestErrorsThatPreventAnalysis(t *testing.T) {
+	const src = `
+-- go.mod --
+module example.com
+-- a/a.go --
+package a
+
+import "fmt"
+import "sync"
+import _ "example.com/b"
+
+func _() {
+	// The copylocks analyzer (RunDespiteErrors, FactTypes={}) does run.
+	var mu sync.Mutex
+	mu2 := mu // copylocks error, reported
+	_ = &mu2
+
+	// The printf analyzer (!RunDespiteErrors, FactTypes!={}) does not run:
+	//  (c, printf) failed because of type error in c
+	//  (b, printf) and (a, printf) do not run because of failed prerequisites.
+	fmt.Printf("%d", "s") // printf error, unreported
+
+	// The bools analyzer (!RunDespiteErrors, FactTypes={}) does not run:
+	var cond bool
+	_ = cond != true && cond != true // bools error, unreported
+}
+
+-- b/b.go --
+package b
+
+import _ "example.com/c"
+
+-- c/c.go --
+package c
+
+var _ = 1 / "" // type error
+
+`
+	Run(t, src, func(t *testing.T, env *Env) {
+		var diags protocol.PublishDiagnosticsParams
+		env.OpenFile("a/a.go")
+		env.AfterChange(
+			env.DiagnosticAtRegexpWithMessage("a/a.go", "mu2 := (mu)", "assignment copies lock value"),
+			ReadDiagnostics("a/a.go", &diags))
+
+		// Assert that there were no other diagnostics.
+		// In particular:
+		// - "fmt.Printf" does not trigger a [printf] finding;
+		// - "cond != true" does not trigger a [bools] finding.
+		//
+		// We use this check in preference to NoDiagnosticAtRegexp
+		// as it is robust in case of minor mistakes in the position
+		// regexp, and because it reports unexpected diagnostics.
+		if got, want := len(diags.Diagnostics), 1; got != want {
+			t.Errorf("got %d diagnostics in a/a.go, want %d:", got, want)
+			for i, diag := range diags.Diagnostics {
+				t.Logf("Diagnostics[%d] = %+v", i, diag)
+			}
+		}
 	})
 }

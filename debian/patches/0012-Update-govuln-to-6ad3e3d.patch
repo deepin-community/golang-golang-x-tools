@@ -1,0 +1,72 @@
+From: "Hana (Hyang-Ah) Kim" <hyangah@gmail.com>
+Date: Tue, 10 Jan 2023 16:24:18 -0500
+Subject: Update govuln to 6ad3e3d
+
+Origin: backport, https://github.com/golang/tools/commit/e81af278
+---
+ gopls/go.mod                        |  4 ++--
+ gopls/go.sum                        |  2 ++
+ gopls/internal/vulncheck/command.go | 12 ++++++++++--
+ 3 files changed, 14 insertions(+), 4 deletions(-)
+
+diff --git a/gopls/go.mod b/gopls/go.mod
+index 2830c16..3b86c1f 100644
+--- a/gopls/go.mod
++++ b/gopls/go.mod
+@@ -11,8 +11,8 @@ require (
+ 	golang.org/x/sync v0.1.0
+ 	golang.org/x/sys v0.4.0
+ 	golang.org/x/text v0.6.0
+-	golang.org/x/tools v0.4.0
+-	golang.org/x/vuln v0.0.0-20221212182831-af59454a8a0a
++	golang.org/x/tools v0.4.1-0.20221217013628-b4dfc36097e2
++	golang.org/x/vuln v0.0.0-20230110180137-6ad3e3d07815
+ 	gopkg.in/yaml.v3 v3.0.1
+ 	honnef.co/go/tools v0.3.3
+ 	mvdan.cc/gofumpt v0.4.0
+diff --git a/gopls/go.sum b/gopls/go.sum
+index 6f68667..ba8eabf 100644
+--- a/gopls/go.sum
++++ b/gopls/go.sum
+@@ -76,6 +76,8 @@ golang.org/x/text v0.6.0 h1:3XmdazWV+ubf7QgHSTWeykHOci5oeekaGJBLkrkaw4k=
+ golang.org/x/text v0.6.0/go.mod h1:mrYo+phRRbMaCq/xk9113O4dZlRixOauAjOtrjsXDZ8=
+ golang.org/x/vuln v0.0.0-20221212182831-af59454a8a0a h1:KWIh6uTTw7r3PEz1N1OIEM8pr5bf1uP1n6JL5Ml56X8=
+ golang.org/x/vuln v0.0.0-20221212182831-af59454a8a0a/go.mod h1:54iI0rrZVM8VdIvTrT/sdlVfMUJWOgvTRQN24CEtZk0=
++golang.org/x/vuln v0.0.0-20230110180137-6ad3e3d07815 h1:A9kONVi4+AnuOr1dopsibH6hLi1Huy54cbeJxnq4vmU=
++golang.org/x/vuln v0.0.0-20230110180137-6ad3e3d07815/go.mod h1:XJiVExZgoZfrrxoTeVsFYrSSk1snhfpOEC95JL+A4T0=
+ golang.org/x/xerrors v0.0.0-20191011141410-1b5146add898/go.mod h1:I/5z698sn9Ka8TeJc9MKroUUfqBBauWjQqLJ2OPfmY0=
+ golang.org/x/xerrors v0.0.0-20191204190536-9bdfabe68543/go.mod h1:I/5z698sn9Ka8TeJc9MKroUUfqBBauWjQqLJ2OPfmY0=
+ golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1/go.mod h1:I/5z698sn9Ka8TeJc9MKroUUfqBBauWjQqLJ2OPfmY0=
+diff --git a/gopls/internal/vulncheck/command.go b/gopls/internal/vulncheck/command.go
+index c450966..1f171f0 100644
+--- a/gopls/internal/vulncheck/command.go
++++ b/gopls/internal/vulncheck/command.go
+@@ -70,8 +70,12 @@ func init() {
+ 			return err
+ 		}
+ 		logf("Loaded %d packages and their dependencies", len(pkgs))
++		cache, err := govulncheck.DefaultCache()
++		if err != nil {
++			return err
++		}
+ 		cli, err := client.NewClient(findGOVULNDB(cfg.Env), client.Options{
+-			HTTPCache: govulncheck.DefaultCache(),
++			HTTPCache: cache,
+ 		})
+ 		if err != nil {
+ 			return err
+@@ -232,9 +236,13 @@ func vulnerablePackages(ctx context.Context, snapshot source.Snapshot, modfile s
+ 	}
+ 
+ 	// Request vuln entries from remote service.
++	fsCache, err := govulncheck.DefaultCache()
++	if err != nil {
++		return nil, err
++	}
+ 	cli, err := client.NewClient(
+ 		findGOVULNDB(snapshot.View().Options().EnvSlice()),
+-		client.Options{HTTPCache: govulncheck.NewInMemoryCache(govulncheck.DefaultCache())})
++		client.Options{HTTPCache: govulncheck.NewInMemoryCache(fsCache)})
+ 	if err != nil {
+ 		return nil, err
+ 	}
