@@ -91,9 +91,9 @@ Use [coc.nvim], with the following `coc-settings.json` configuration:
 
 ```json
   "languageserver": {
-    "golang": {
+    "go": {
       "command": "gopls",
-      "rootPatterns": ["go.mod", ".vim/", ".git/", ".hg/"],
+      "rootPatterns": ["go.work", "go.mod", ".vim/", ".git/", ".hg/"],
       "filetypes": ["go"],
       "initializationOptions": {
         "usePlaceholders": true
@@ -101,6 +101,13 @@ Use [coc.nvim], with the following `coc-settings.json` configuration:
     }
   }
 ```
+
+If you use `go.work` files, you may want to set the
+`workspace.workspaceFolderCheckCwd` option. This will force coc.nvim to search
+parent directories for `go.work` files, even if the current open directory has
+a `go.mod` file. See the
+[coc.nvim documentation](https://github.com/neoclide/coc.nvim/wiki/Using-workspaceFolders)
+for more details.
 
 Other [settings](settings.md) can be added in `initializationOptions` too.
 
@@ -141,8 +148,12 @@ You can add custom configuration using Lua.  Here is an example of enabling the
 ```vim
 lua <<EOF
   lspconfig = require "lspconfig"
+  util = require "lspconfig/util"
+
   lspconfig.gopls.setup {
     cmd = {"gopls", "serve"},
+    filetypes = {"go", "gomod"},
+    root_dir = util.root_pattern("go.work", "go.mod", ".git"),
     settings = {
       gopls = {
         analyses = {
@@ -157,56 +168,32 @@ EOF
 
 ### <a href="#neovim-imports" id="neovim-imports">Imports</a>
 
-To get your imports ordered on save, like `goimports` does, you can define
-a helper function in Lua:
+Use the following configuration to have your imports organized on save using
+the logic of `goimports`. Note: this requires Neovim v0.7.0 or later.
 
-```vim
-lua <<EOF
-  -- …
-
-  function goimports(timeout_ms)
-    local context = { only = { "source.organizeImports" } }
-    vim.validate { context = { context, "t", true } }
-
-    local params = vim.lsp.util.make_range_params()
-    params.context = context
-
-    -- See the implementation of the textDocument/codeAction callback
-    -- (lua/vim/lsp/handler.lua) for how to do this properly.
-    local result = vim.lsp.buf_request_sync(0, "textDocument/codeAction", params, timeout_ms)
-    if not result or next(result) == nil then return end
-    local actions = result[1].result
-    if not actions then return end
-    local action = actions[1]
-
-    -- textDocument/codeAction can return either Command[] or CodeAction[]. If it
-    -- is a CodeAction, it can have either an edit, a command or both. Edits
-    -- should be executed first.
-    if action.edit or type(action.command) == "table" then
-      if action.edit then
-        vim.lsp.util.apply_workspace_edit(action.edit)
-      end
-      if type(action.command) == "table" then
-        vim.lsp.buf.execute_command(action.command)
-      end
-    else
-      vim.lsp.buf.execute_command(action)
-    end
+```lua
+vim.api.nvim_create_autocmd('BufWritePre', {
+  pattern = '*.go',
+  callback = function()
+    vim.lsp.buf.code_action({ context = { only = { 'source.organizeImports' } }, apply = true })
   end
-EOF
-
-autocmd BufWritePre *.go lua goimports(1000)
+})
 ```
-
-(Taken from the [discussion][nvim-lspconfig-imports] on Neovim issue tracker.)
 
 ### <a href="#neovim-omnifunc" id="neovim-omnifunc">Omnifunc</a>
 
-To make your <kbd>Ctrl</kbd>+<kbd>x</kbd>,<kbd>Ctrl</kbd>+<kbd>o</kbd> work, add
-this to your `init.vim`:
+In Neovim v0.8.1 and later if you don't set the option `omnifunc`, it will auto
+set to `v:lua.vim.lsp.omnifunc`. If you are using an earlier version, you can
+configure it manually:
 
-```vim
-autocmd FileType go setlocal omnifunc=v:lua.vim.lsp.omnifunc
+```lua
+local on_attach = function(client, bufnr)
+  -- Enable completion triggered by <c-x><c-o>
+  vim.api.nvim_buf_set_option(bufnr, 'omnifunc', 'v:lua.vim.lsp.omnifunc')
+end
+require('lspconfig').gopls.setup({
+   on_attach = on_attach
+})
 ```
 
 ### <a href="#neovim-links" id="neovim-links">Additional Links</a>
@@ -225,5 +212,5 @@ autocmd FileType go setlocal omnifunc=v:lua.vim.lsp.omnifunc
 [govim-install]: https://github.com/myitcv/govim/blob/master/README.md#govim---go-development-plugin-for-vim8
 [nvim-docs]: https://neovim.io/doc/user/lsp.html
 [nvim-install]: https://github.com/neovim/neovim/wiki/Installing-Neovim
-[nvim-lspconfig]: https://github.com/neovim/nvim-lspconfig/blob/master/CONFIG.md#gopls
+[nvim-lspconfig]: https://github.com/neovim/nvim-lspconfig/blob/master/doc/server_configurations.md#gopls
 [nvim-lspconfig-imports]: https://github.com/neovim/nvim-lspconfig/issues/115

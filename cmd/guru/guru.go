@@ -24,10 +24,7 @@ import (
 	"strings"
 
 	"golang.org/x/tools/go/ast/astutil"
-	"golang.org/x/tools/go/buildutil"
 	"golang.org/x/tools/go/loader"
-	"golang.org/x/tools/go/pointer"
-	"golang.org/x/tools/go/ssa"
 )
 
 type printfFunc func(pos interface{}, format string, args ...interface{})
@@ -55,12 +52,12 @@ type queryPos struct {
 	info       *loader.PackageInfo // type info for the queried package (nil for fastQueryPos)
 }
 
-// TypeString prints type T relative to the query position.
+// typeString prints type T relative to the query position.
 func (qpos *queryPos) typeString(T types.Type) string {
 	return types.TypeString(T, types.RelativeTo(qpos.info.Pkg))
 }
 
-// ObjectString prints object obj relative to the query position.
+// objectString prints object obj relative to the query position.
 func (qpos *queryPos) objectString(obj types.Object) string {
 	return types.ObjectString(obj, types.RelativeTo(qpos.info.Pkg))
 }
@@ -70,11 +67,6 @@ type Query struct {
 	Pos   string         // query position
 	Build *build.Context // package loading configuration
 
-	// pointer analysis options
-	Scope      []string  // main packages in (*loader.Config).FromArgs syntax
-	PTALog     io.Writer // (optional) pointer-analysis log file
-	Reflection bool      // model reflection soundly (currently slow).
-
 	// result-printing function, safe for concurrent use
 	Output func(*token.FileSet, QueryResult)
 }
@@ -82,18 +74,6 @@ type Query struct {
 // Run runs an guru query and populates its Fset and Result.
 func Run(mode string, q *Query) error {
 	switch mode {
-	case "callees":
-		return callees(q)
-	case "callers":
-		return callers(q)
-	case "callstack":
-		return callstack(q)
-	case "peers":
-		return peers(q)
-	case "pointsto":
-		return pointsto(q)
-	case "whicherrs":
-		return whicherrs(q)
 	case "definition":
 		return definition(q)
 	case "describe":
@@ -106,47 +86,11 @@ func Run(mode string, q *Query) error {
 		return referrers(q)
 	case "what":
 		return what(q)
+	case "callees", "callers", "pointsto", "whicherrs", "callstack", "peers":
+		return fmt.Errorf("mode %q is no longer supported (see Go issue #59676)", mode)
 	default:
 		return fmt.Errorf("invalid mode: %q", mode)
 	}
-}
-
-func setPTAScope(lconf *loader.Config, scope []string) error {
-	pkgs := buildutil.ExpandPatterns(lconf.Build, scope)
-	if len(pkgs) == 0 {
-		return fmt.Errorf("no packages specified for pointer analysis scope")
-	}
-	// The value of each entry in pkgs is true,
-	// giving ImportWithTests (not Import) semantics.
-	lconf.ImportPkgs = pkgs
-	return nil
-}
-
-// Create a pointer.Config whose scope is the initial packages of lprog
-// and their dependencies.
-func setupPTA(prog *ssa.Program, lprog *loader.Program, ptaLog io.Writer, reflection bool) (*pointer.Config, error) {
-	// For each initial package (specified on the command line),
-	// if it has a main function, analyze that,
-	// otherwise analyze its tests, if any.
-	var mains []*ssa.Package
-	for _, info := range lprog.InitialPackages() {
-		p := prog.Package(info.Pkg)
-
-		// Add package to the pointer analysis scope.
-		if p.Pkg.Name() == "main" && p.Func("main") != nil {
-			mains = append(mains, p)
-		} else if main := prog.CreateTestMainPackage(p); main != nil {
-			mains = append(mains, main)
-		}
-	}
-	if mains == nil {
-		return nil, fmt.Errorf("analysis scope has no main and no tests")
-	}
-	return &pointer.Config{
-		Log:        ptaLog,
-		Reflection: reflection,
-		Mains:      mains,
-	}, nil
 }
 
 // importQueryPackage finds the package P containing the
@@ -210,12 +154,11 @@ func pkgContainsFile(bp *build.Package, filename string) byte {
 	return 0 // not found
 }
 
-// ParseQueryPos parses the source query position pos and returns the
+// parseQueryPos parses the source query position pos and returns the
 // AST node of the loaded program lprog that it identifies.
 // If needExact, it must identify a single AST subtree;
 // this is appropriate for queries that allow fairly arbitrary syntax,
 // e.g. "describe".
-//
 func parseQueryPos(lprog *loader.Program, pos string, needExact bool) (*queryPos, error) {
 	filename, startOffset, endOffset, err := parsePos(pos)
 	if err != nil {
@@ -311,15 +254,6 @@ func allowErrors(lconf *loader.Config) {
 	lconf.TypeChecker.Error = func(err error) {}
 }
 
-// ptrAnalysis runs the pointer analysis and returns its result.
-func ptrAnalysis(conf *pointer.Config) *pointer.Result {
-	result, err := pointer.Analyze(conf)
-	if err != nil {
-		panic(err) // pointer analysis internal error
-	}
-	return result
-}
-
 func unparen(e ast.Expr) ast.Expr { return astutil.Unparen(e) }
 
 // deref returns a pointer's element type; otherwise it returns typ.
@@ -334,16 +268,15 @@ func deref(typ types.Type) types.Type {
 // where location is derived from pos.
 //
 // pos must be one of:
-//    - a token.Pos, denoting a position
-//    - an ast.Node, denoting an interval
-//    - anything with a Pos() method:
-//         ssa.Member, ssa.Value, ssa.Instruction, types.Object, pointer.Label, etc.
-//    - a QueryPos, denoting the extent of the user's query.
-//    - nil, meaning no position at all.
+//   - a token.Pos, denoting a position
+//   - an ast.Node, denoting an interval
+//   - anything with a Pos() method:
+//     ssa.Member, ssa.Value, ssa.Instruction, types.Object, etc.
+//   - a QueryPos, denoting the extent of the user's query.
+//   - nil, meaning no position at all.
 //
-// The output format is is compatible with the 'gnu'
+// The output format is compatible with the 'gnu'
 // compilation-error-regexp in Emacs' compilation mode.
-//
 func fprintf(w io.Writer, fset *token.FileSet, pos interface{}, format string, args ...interface{}) {
 	var start, end token.Pos
 	switch pos := pos.(type) {

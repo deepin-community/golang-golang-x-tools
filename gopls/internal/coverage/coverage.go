@@ -12,9 +12,13 @@
 // -o controls where the coverage file is written, defaulting to /tmp/cover.out
 // -i coverage-file will generate the report from an existing coverage file
 // -v controls verbosity (0: only report coverage, 1: report as each directory is finished,
-//      2: report on each test, 3: more details, 4: too much)
+//
+//	2: report on each test, 3: more details, 4: too much)
+//
 // -t tests only tests packages in the given comma-separated list of directories in gopls.
-//      The names should start with ., as in ./internal/regtest/bench
+//
+//	The names should start with ., as in ./internal/regtest/bench
+//
 // -run tests. If set, -run tests is passed on to the go test command.
 //
 // Despite gopls' use of goroutines, the counts are almost deterministic.
@@ -60,7 +64,7 @@ func main() {
 	tests = realTestName(tests)
 
 	// report coverage for packages under internal/lsp
-	parg := "golang.org/x/tools/internal/lsp/..."
+	parg := "golang.org/x/tools/gopls/internal/lsp/..."
 
 	accum := []string{}
 	seen := make(map[string]bool)
@@ -184,7 +188,12 @@ func maybePrint(m result) {
 		if *verbose > 3 {
 			fmt.Printf("%s %s %q %.3f\n", m.Action, m.Test, m.Output, m.Elapsed)
 		}
+	case "pause", "cont":
+		if *verbose > 2 {
+			fmt.Printf("%s %s %.3f\n", m.Action, m.Test, m.Elapsed)
+		}
 	default:
+		fmt.Printf("%#v\n", m)
 		log.Fatalf("unknown action %s\n", m.Action)
 	}
 }
@@ -224,7 +233,7 @@ func checkCwd() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	// we expect to be a the root of golang.org/x/tools
+	// we expect to be at the root of golang.org/x/tools
 	cmd := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", "golang.org/x/tools")
 	buf, err := cmd.Output()
 	buf = bytes.Trim(buf, "\n \t") // remove \n at end
@@ -238,10 +247,6 @@ func checkCwd() {
 	_, err = os.Stat("gopls")
 	if err != nil {
 		log.Fatalf("expected a gopls directory, %v", err)
-	}
-	_, err = os.Stat("internal/lsp")
-	if err != nil {
-		log.Fatalf("expected to see internal/lsp, %v", err)
 	}
 }
 

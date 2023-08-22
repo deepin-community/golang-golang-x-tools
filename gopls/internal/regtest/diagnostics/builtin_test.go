@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	. "golang.org/x/tools/internal/lsp/regtest"
+	. "golang.org/x/tools/gopls/internal/lsp/regtest"
 )
 
 func TestIssue44866(t *testing.T) {
@@ -26,13 +26,10 @@ const (
 `
 	Run(t, src, func(t *testing.T, env *Env) {
 		env.OpenFile("a.go")
-		name, _ := env.GoToDefinition("a.go", env.RegexpSearch("a.go", "iota"))
-		if !strings.HasSuffix(name, "builtin.go") {
-			t.Fatalf("jumped to %q, want builtin.go", name)
+		loc := env.GoToDefinition(env.RegexpSearch("a.go", "iota"))
+		if !strings.HasSuffix(string(loc.URI), "builtin.go") {
+			t.Fatalf("jumped to %q, want builtin.go", loc.URI)
 		}
-		env.Await(OnceMet(
-			env.DoneWithOpen(),
-			NoDiagnostics("builtin.go"),
-		))
+		env.AfterChange(NoDiagnostics(ForFile("builtin.go")))
 	})
 }

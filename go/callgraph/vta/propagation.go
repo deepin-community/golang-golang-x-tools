@@ -7,6 +7,7 @@ package vta
 import (
 	"go/types"
 
+	"golang.org/x/tools/go/callgraph/vta/internal/trie"
 	"golang.org/x/tools/go/ssa"
 
 	"golang.org/x/tools/go/types/typeutil"
@@ -19,53 +20,52 @@ import (
 // with ids X and Y s.t. X < Y, Y comes before X in the topological order.
 func scc(g vtaGraph) (map[node]int, int) {
 	// standard data structures used by Tarjan's algorithm.
-	var index uint64
+	type state struct {
+		index   int
+		lowLink int
+		onStack bool
+	}
+	states := make(map[node]*state, len(g))
 	var stack []node
-	indexMap := make(map[node]uint64)
-	lowLink := make(map[node]uint64)
-	onStack := make(map[node]bool)
 
-	nodeToSccID := make(map[node]int)
+	nodeToSccID := make(map[node]int, len(g))
 	sccID := 0
 
 	var doSCC func(node)
 	doSCC = func(n node) {
-		indexMap[n] = index
-		lowLink[n] = index
-		index = index + 1
-		onStack[n] = true
+		index := len(states)
+		ns := &state{index: index, lowLink: index, onStack: true}
+		states[n] = ns
 		stack = append(stack, n)
 
 		for s := range g[n] {
-			if _, ok := indexMap[s]; !ok {
+			if ss, visited := states[s]; !visited {
 				// Analyze successor s that has not been visited yet.
 				doSCC(s)
-				lowLink[n] = min(lowLink[n], lowLink[s])
-			} else if onStack[s] {
+				ss = states[s]
+				ns.lowLink = min(ns.lowLink, ss.lowLink)
+			} else if ss.onStack {
 				// The successor is on the stack, meaning it has to be
 				// in the current SCC.
-				lowLink[n] = min(lowLink[n], indexMap[s])
+				ns.lowLink = min(ns.lowLink, ss.index)
 			}
 		}
 
 		// if n is a root node, pop the stack and generate a new SCC.
-		if lowLink[n] == indexMap[n] {
-			for {
-				w := stack[len(stack)-1]
+		if ns.lowLink == index {
+			var w node
+			for w != n {
+				w = stack[len(stack)-1]
 				stack = stack[:len(stack)-1]
-				onStack[w] = false
+				states[w].onStack = false
 				nodeToSccID[w] = sccID
-				if w == n {
-					break
-				}
 			}
 			sccID++
 		}
 	}
 
-	index = 0
 	for n := range g {
-		if _, ok := indexMap[n]; !ok {
+		if _, visited := states[n]; !visited {
 			doSCC(n)
 		}
 	}
@@ -73,7 +73,7 @@ func scc(g vtaGraph) (map[node]int, int) {
 	return nodeToSccID, sccID
 }
 
-func min(x, y uint64) uint64 {
+func min(x, y int) int {
 	if x < y {
 		return x
 	}
@@ -94,21 +94,21 @@ type propType struct {
 // the role of a map from nodes to a set of propTypes.
 type propTypeMap struct {
 	nodeToScc  map[node]int
-	sccToTypes map[int]map[propType]bool
+	sccToTypes map[int]*trie.MutMap
 }
 
-// propTypes returns a set of propTypes associated with
+// propTypes returns a list of propTypes associated with
 // node `n`. If `n` is not in the map `ptm`, nil is returned.
-//
-// Note: for performance reasons, the returned set is a
-// reference to existing set in the map `ptm`, so any updates
-// to it will affect `ptm` as well.
-func (ptm propTypeMap) propTypes(n node) map[propType]bool {
+func (ptm propTypeMap) propTypes(n node) []propType {
 	id, ok := ptm.nodeToScc[n]
 	if !ok {
 		return nil
 	}
-	return ptm.sccToTypes[id]
+	var pts []propType
+	for _, elem := range trie.Elems(ptm.sccToTypes[id].M) {
+		pts = append(pts, elem.(propType))
+	}
+	return pts
 }
 
 // propagate reduces the `graph` based on its SCCs and
@@ -125,11 +125,25 @@ func propagate(graph vtaGraph, canon *typeutil.Map) propTypeMap {
 		sccs[id] = append(sccs[id], n)
 	}
 
+	// propTypeIds are used to create unique ids for
+	// propType, to be used for trie-based type sets.
+	propTypeIds := make(map[propType]uint64)
+	// Id creation is based on == equality, which works
+	// as types are canonicalized (see getPropType).
+	propTypeId := func(p propType) uint64 {
+		if id, ok := propTypeIds[p]; ok {
+			return id
+		}
+		id := uint64(len(propTypeIds))
+		propTypeIds[p] = id
+		return id
+	}
+	builder := trie.NewBuilder()
 	// Initialize sccToTypes to avoid repeated check
 	// for initialization later.
-	sccToTypes := make(map[int]map[propType]bool, sccID)
+	sccToTypes := make(map[int]*trie.MutMap, sccID)
 	for i := 0; i <= sccID; i++ {
-		sccToTypes[i] = nodeTypes(sccs[i], canon)
+		sccToTypes[i] = nodeTypes(sccs[i], builder, propTypeId, canon)
 	}
 
 	for i := len(sccs) - 1; i >= 0; i-- {
@@ -141,7 +155,7 @@ func propagate(graph vtaGraph, canon *typeutil.Map) propTypeMap {
 		}
 		// Propagate types to all successor SCCs.
 		for nextScc := range nextSccs {
-			mergeTypes(sccToTypes[nextScc], sccToTypes[i])
+			sccToTypes[nextScc].Merge(sccToTypes[i].M)
 		}
 	}
 	return propTypeMap{nodeToScc: nodeToScc, sccToTypes: sccToTypes}
@@ -149,14 +163,27 @@ func propagate(graph vtaGraph, canon *typeutil.Map) propTypeMap {
 
 // nodeTypes returns a set of propTypes for `nodes`. These are the
 // propTypes stemming from the type of each node in `nodes` plus.
-func nodeTypes(nodes []node, canon *typeutil.Map) map[propType]bool {
-	types := make(map[propType]bool)
+func nodeTypes(nodes []node, builder *trie.Builder, propTypeId func(p propType) uint64, canon *typeutil.Map) *trie.MutMap {
+	typeSet := builder.MutEmpty()
 	for _, n := range nodes {
 		if hasInitialTypes(n) {
-			types[getPropType(n, canon)] = true
+			pt := getPropType(n, canon)
+			typeSet.Update(propTypeId(pt), pt)
 		}
 	}
-	return types
+	return &typeSet
+}
+
+// hasInitialTypes check if a node can have initial types.
+// Returns true iff `n` is not a panic, recover, nestedPtr*
+// node, nor a node whose type is an interface.
+func hasInitialTypes(n node) bool {
+	switch n.(type) {
+	case panicArg, recoverReturn, nestedPtrFunction, nestedPtrInterface:
+		return false
+	default:
+		return !types.IsInterface(n.Type())
+	}
 }
 
 // getPropType creates a propType for `node` based on its type.
@@ -168,11 +195,4 @@ func getPropType(node node, canon *typeutil.Map) propType {
 		return propType{f: fn.f, typ: t}
 	}
 	return propType{f: nil, typ: t}
-}
-
-// mergeTypes merges propTypes in `rhs` to `lhs`.
-func mergeTypes(lhs, rhs map[propType]bool) {
-	for typ := range rhs {
-		lhs[typ] = true
-	}
 }

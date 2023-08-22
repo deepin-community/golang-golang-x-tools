@@ -7,10 +7,10 @@ package misc
 import (
 	"testing"
 
-	. "golang.org/x/tools/internal/lsp/regtest"
+	. "golang.org/x/tools/gopls/internal/lsp/regtest"
+	"golang.org/x/tools/gopls/internal/lsp/tests/compare"
 
-	"golang.org/x/tools/internal/lsp/protocol"
-	"golang.org/x/tools/internal/lsp/tests"
+	"golang.org/x/tools/gopls/internal/lsp/protocol"
 )
 
 // A basic test for fillstruct, now that it uses a command.
@@ -34,11 +34,7 @@ func Foo() {
 `
 	Run(t, basic, func(t *testing.T, env *Env) {
 		env.OpenFile("main.go")
-		pos := env.RegexpSearch("main.go", "Info{}").ToProtocolPosition()
-		if err := env.Editor.RefactorRewrite(env.Ctx, "main.go", &protocol.Range{
-			Start: pos,
-			End:   pos,
-		}); err != nil {
+		if err := env.Editor.RefactorRewrite(env.Ctx, env.RegexpSearch("main.go", "Info{}")); err != nil {
 			t.Fatal(err)
 		}
 		want := `package main
@@ -55,8 +51,8 @@ func Foo() {
 	}
 }
 `
-		if got := env.Editor.BufferText("main.go"); got != want {
-			t.Fatalf("TestFillStruct failed:\n%s", tests.Diff(t, want, got))
+		if got := env.BufferText("main.go"); got != want {
+			t.Fatalf("TestFillStruct failed:\n%s", compare.Text(want, got))
 		}
 	})
 }
@@ -77,10 +73,11 @@ func Foo() error {
 	Run(t, files, func(t *testing.T, env *Env) {
 		env.OpenFile("main.go")
 		var d protocol.PublishDiagnosticsParams
-		env.Await(OnceMet(
-			env.DiagnosticAtRegexpWithMessage("main.go", `return`, "wrong number of return values"),
+		env.AfterChange(
+			// The error message here changed in 1.18; "return values" covers both forms.
+			Diagnostics(env.AtRegexp("main.go", `return`), WithMessage("return values")),
 			ReadDiagnostics("main.go", &d),
-		))
+		)
 		codeActions := env.CodeAction("main.go", d.Diagnostics)
 		if len(codeActions) != 2 {
 			t.Fatalf("expected 2 code actions, got %v", len(codeActions))
@@ -101,6 +98,6 @@ func Foo() error {
 			t.Fatalf("expected fixall code action, got none")
 		}
 		env.ApplyQuickFixes("main.go", d.Diagnostics)
-		env.Await(EmptyDiagnostics("main.go"))
+		env.AfterChange(NoDiagnostics(ForFile("main.go")))
 	})
 }

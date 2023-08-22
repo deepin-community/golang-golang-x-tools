@@ -217,7 +217,7 @@ func testLoadImportsGraph(t *testing.T, exporter packagestest.Exporter) {
 		id          string
 		wantName    string
 		wantKind    string
-		wantSrcs    string
+		wantSrcs    string // = {Go,Other,Embed}Files
 		wantIgnored string
 	}{
 		{"golang.org/fake/a", "a", "package", "a.go", ""},
@@ -227,7 +227,7 @@ func testLoadImportsGraph(t *testing.T, exporter packagestest.Exporter) {
 		{"container/list", "list", "package", "list.go", ""},
 		{"golang.org/fake/subdir/d", "d", "package", "d.go", ""},
 		{"golang.org/fake/subdir/d.test", "main", "command", "0.go", ""},
-		{"unsafe", "unsafe", "package", "", ""},
+		{"unsafe", "unsafe", "package", "unsafe.go", ""},
 	} {
 		p, ok := all[test.id]
 		if !ok {
@@ -250,10 +250,10 @@ func testLoadImportsGraph(t *testing.T, exporter packagestest.Exporter) {
 		}
 
 		if srcs := strings.Join(srcs(p), " "); srcs != test.wantSrcs {
-			t.Errorf("%s.Srcs = [%s], want [%s]", test.id, srcs, test.wantSrcs)
+			t.Errorf("%s.{Go,Other,Embed}Files = [%s], want [%s]", test.id, srcs, test.wantSrcs)
 		}
 		if ignored := strings.Join(cleanPaths(p.IgnoredFiles), " "); ignored != test.wantIgnored {
-			t.Errorf("%s.Srcs = [%s], want [%s]", test.id, ignored, test.wantIgnored)
+			t.Errorf("%s.IgnoredFiles = [%s], want [%s]", test.id, ignored, test.wantIgnored)
 		}
 	}
 
@@ -927,6 +927,7 @@ func testParseFileModifyAST(t *testing.T, exporter packagestest.Exporter) {
 
 func TestAdHocPackagesBadImport(t *testing.T) {
 	t.Parallel()
+	testenv.NeedsTool(t, "go")
 
 	// This test doesn't use packagestest because we are testing ad-hoc packages,
 	// which are outside of $GOPATH and outside of a module.
@@ -1077,6 +1078,10 @@ func testAbsoluteFilenames(t *testing.T, exporter packagestest.Exporter) {
 			"e/e2.go":         `package main; import _ "golang.org/fake/c"`,
 			"f/f.go":          `package f`,
 			"f/f.s":           ``,
+			"g/g.go":          `package g; import _ "embed";` + "\n//go:embed g2.txt\n" + `var s string`,
+			"g/g2.txt":        "hello",
+			"h/h.go":          `package g; import _ "embed";` + "\n//go:embed a*.txt\n" + `var s string`,
+			"h/aa.txt":        "hello",
 		}}})
 	defer exported.Cleanup()
 	exported.Config.Dir = filepath.Dir(filepath.Dir(exported.File("golang.org/fake", "a/a.go")))
@@ -1103,6 +1108,8 @@ func testAbsoluteFilenames(t *testing.T, exporter packagestest.Exporter) {
 		{"golang.org/fake/subdir/e", "d.go"},
 		{"golang.org/fake/e", "e.go e2.go"},
 		{"golang.org/fake/f", "f.go f.s"},
+		{"golang.org/fake/g", "g.go g2.txt"},
+		{"golang.org/fake/h", "h.go aa.txt"},
 		// Relative paths
 		{"./a", "a.go"},
 		{"./b/vendor/a", "a.go"},
@@ -1112,8 +1119,10 @@ func testAbsoluteFilenames(t *testing.T, exporter packagestest.Exporter) {
 		{"./subdir/e", "d.go"},
 		{"./e", "e.go e2.go"},
 		{"./f", "f.go f.s"},
+		{"./g", "g.go g2.txt"},
+		{"./h", "h.go aa.txt"},
 	} {
-		exported.Config.Mode = packages.LoadFiles
+		exported.Config.Mode = packages.LoadFiles | packages.NeedEmbedFiles
 		pkgs, err := packages.Load(exported.Config, test.pattern)
 		if err != nil {
 			t.Errorf("pattern %s: %v", test.pattern, err)
@@ -1131,6 +1140,9 @@ func testAbsoluteFilenames(t *testing.T, exporter packagestest.Exporter) {
 				checkFile(filename)
 			}
 			for _, filename := range pkg.OtherFiles {
+				checkFile(filename)
+			}
+			for _, filename := range pkg.EmbedFiles {
 				checkFile(filename)
 			}
 			for _, filename := range pkg.IgnoredFiles {
@@ -2233,8 +2245,8 @@ func TestLoadModeStrings(t *testing.T) {
 			"LoadMode(NeedDeps)",
 		},
 		{
-			packages.NeedExportsFile,
-			"LoadMode(NeedExportsFile)",
+			packages.NeedExportFile,
+			"LoadMode(NeedExportFile)",
 		},
 		{
 			packages.NeedTypes,
@@ -2253,12 +2265,12 @@ func TestLoadModeStrings(t *testing.T) {
 			"LoadMode(NeedTypesSizes)",
 		},
 		{
-			packages.NeedName | packages.NeedExportsFile,
-			"LoadMode(NeedName|NeedExportsFile)",
+			packages.NeedName | packages.NeedExportFile,
+			"LoadMode(NeedName|NeedExportFile)",
 		},
 		{
-			packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles | packages.NeedImports | packages.NeedDeps | packages.NeedExportsFile | packages.NeedTypes | packages.NeedSyntax | packages.NeedTypesInfo | packages.NeedTypesSizes,
-			"LoadMode(NeedName|NeedFiles|NeedCompiledGoFiles|NeedImports|NeedDeps|NeedExportsFile|NeedTypes|NeedSyntax|NeedTypesInfo|NeedTypesSizes)",
+			packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles | packages.NeedImports | packages.NeedDeps | packages.NeedExportFile | packages.NeedTypes | packages.NeedSyntax | packages.NeedTypesInfo | packages.NeedTypesSizes,
+			"LoadMode(NeedName|NeedFiles|NeedCompiledGoFiles|NeedImports|NeedDeps|NeedExportFile|NeedTypes|NeedSyntax|NeedTypesInfo|NeedTypesSizes)",
 		},
 		{
 			packages.NeedName | 8192,
@@ -2460,10 +2472,55 @@ func testIssue37098(t *testing.T, exporter packagestest.Exporter) {
 	}
 }
 
+// TestIssue56632 checks that CompiledGoFiles does not contain non-go files regardless of
+// whether the NeedFiles mode bit is set.
+func TestIssue56632(t *testing.T) {
+	t.Parallel()
+	testenv.NeedsGoBuild(t)
+	testenv.NeedsTool(t, "cgo")
+
+	exported := packagestest.Export(t, packagestest.GOPATH, []packagestest.Module{{
+		Name: "golang.org/issue56632",
+		Files: map[string]interface{}{
+			"a/a.go": `package a`,
+			"a/a_cgo.go": `package a
+
+import "C"`,
+			"a/a.s": ``,
+			"a/a.c": ``,
+		}}})
+	defer exported.Cleanup()
+
+	modes := []packages.LoadMode{packages.NeedCompiledGoFiles, packages.NeedCompiledGoFiles | packages.NeedFiles, packages.NeedImports | packages.NeedCompiledGoFiles, packages.NeedImports | packages.NeedFiles | packages.NeedCompiledGoFiles}
+	for _, mode := range modes {
+		exported.Config.Mode = mode
+
+		initial, err := packages.Load(exported.Config, "golang.org/issue56632/a")
+		if err != nil {
+			t.Fatalf("failed to load package: %v", err)
+		}
+
+		if len(initial) != 1 {
+			t.Errorf("expected 3 packages, got %d", len(initial))
+		}
+
+		p := initial[0]
+
+		if len(p.Errors) != 0 {
+			t.Errorf("expected no errors, got %v", p.Errors)
+		}
+
+		for _, f := range p.CompiledGoFiles {
+			if strings.HasSuffix(f, ".s") || strings.HasSuffix(f, ".c") {
+				t.Errorf("expected no non-Go CompiledGoFiles, got file %q in CompiledGoFiles", f)
+			}
+		}
+	}
+}
+
 // TestInvalidFilesInXTest checks the fix for golang/go#37971 in Go 1.15.
 func TestInvalidFilesInXTest(t *testing.T) { testAllOrModulesParallel(t, testInvalidFilesInXTest) }
 func testInvalidFilesInXTest(t *testing.T, exporter packagestest.Exporter) {
-	testenv.NeedsGo1Point(t, 15)
 	exported := packagestest.Export(t, exporter, []packagestest.Module{
 		{
 			Name: "golang.org/fake",
@@ -2490,7 +2547,6 @@ func testInvalidFilesInXTest(t *testing.T, exporter packagestest.Exporter) {
 
 func TestTypecheckCgo(t *testing.T) { testAllOrModulesParallel(t, testTypecheckCgo) }
 func testTypecheckCgo(t *testing.T, exporter packagestest.Exporter) {
-	testenv.NeedsGo1Point(t, 15)
 	testenv.NeedsTool(t, "cgo")
 
 	const cgo = `package cgo
@@ -2662,8 +2718,6 @@ func TestInvalidPackageName(t *testing.T) {
 }
 
 func testInvalidPackageName(t *testing.T, exporter packagestest.Exporter) {
-	testenv.NeedsGo1Point(t, 15)
-
 	exported := packagestest.Export(t, exporter, []packagestest.Module{{
 		Name: "golang.org/fake",
 		Files: map[string]interface{}{
@@ -2698,6 +2752,33 @@ func TestEmptyEnvironment(t *testing.T) {
 	}
 }
 
+func TestPackageLoadSingleFile(t *testing.T) {
+	testenv.NeedsTool(t, "go")
+
+	tmp, err := ioutil.TempDir("", "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmp)
+
+	filename := filepath.Join(tmp, "a.go")
+
+	if err := ioutil.WriteFile(filename, []byte(`package main; func main() { println("hello world") }`), 0775); err != nil {
+		t.Fatal(err)
+	}
+
+	pkgs, err := packages.Load(&packages.Config{Mode: packages.LoadSyntax, Dir: tmp}, "file="+filename)
+	if err != nil {
+		t.Fatalf("could not load package: %v", err)
+	}
+	if len(pkgs) != 1 {
+		t.Fatalf("expected one package to be loaded, got %d", len(pkgs))
+	}
+	if len(pkgs[0].CompiledGoFiles) != 1 || pkgs[0].CompiledGoFiles[0] != filename {
+		t.Fatalf("expected one compiled go file (%q), got %v", filename, pkgs[0].CompiledGoFiles)
+	}
+}
+
 func errorMessages(errors []packages.Error) []string {
 	var msgs []string
 	for _, err := range errors {
@@ -2707,7 +2788,11 @@ func errorMessages(errors []packages.Error) []string {
 }
 
 func srcs(p *packages.Package) []string {
-	return cleanPaths(append(p.GoFiles[:len(p.GoFiles):len(p.GoFiles)], p.OtherFiles...))
+	var files []string
+	files = append(files, p.GoFiles...)
+	files = append(files, p.OtherFiles...)
+	files = append(files, p.EmbedFiles...)
+	return cleanPaths(files)
 }
 
 // cleanPaths attempts to reduce path names to stable forms
@@ -2831,4 +2916,12 @@ func copyAll(srcPath, dstPath string) error {
 		}
 		return nil
 	})
+}
+
+func TestExportFile(t *testing.T) {
+	// This used to trigger the log.Fatal in loadFromExportData.
+	// See go.dev/issue/45584.
+	cfg := new(packages.Config)
+	cfg.Mode = packages.NeedTypes
+	packages.Load(cfg, "fmt")
 }

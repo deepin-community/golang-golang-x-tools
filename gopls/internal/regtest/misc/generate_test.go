@@ -12,7 +12,7 @@ package misc
 import (
 	"testing"
 
-	. "golang.org/x/tools/internal/lsp/regtest"
+	. "golang.org/x/tools/gopls/internal/lsp/regtest"
 )
 
 func TestGenerateProgress(t *testing.T) {
@@ -38,12 +38,12 @@ func main() {
 -- lib1/lib.go --
 package lib1
 
-//go:generate go run ../generate.go lib1
+//` + `go:generate go run ../generate.go lib1
 
 -- lib2/lib.go --
 package lib2
 
-//go:generate go run ../generate.go lib2
+//` + `go:generate go run ../generate.go lib2
 
 -- main.go --
 package main
@@ -59,15 +59,14 @@ func main() {
 `
 
 	Run(t, generatedWorkspace, func(t *testing.T, env *Env) {
-		env.Await(
-			env.DiagnosticAtRegexp("main.go", "lib1.(Answer)"),
+		env.OnceMet(
+			InitialWorkspaceLoad,
+			Diagnostics(env.AtRegexp("main.go", "lib1.(Answer)")),
 		)
 		env.RunGenerate("./lib1")
 		env.RunGenerate("./lib2")
-		env.Await(
-			OnceMet(
-				env.DoneWithChangeWatchedFiles(),
-				EmptyDiagnostics("main.go")),
+		env.AfterChange(
+			NoDiagnostics(ForFile("main.go")),
 		)
 	})
 }

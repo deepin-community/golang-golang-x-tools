@@ -5,15 +5,15 @@
 package misc
 
 import (
+	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"testing"
 
-	. "golang.org/x/tools/internal/lsp/regtest"
-	"golang.org/x/tools/internal/testenv"
-
-	"golang.org/x/tools/internal/lsp/fake"
-	"golang.org/x/tools/internal/lsp/tests"
+	"golang.org/x/tools/gopls/internal/lsp/protocol"
+	. "golang.org/x/tools/gopls/internal/lsp/regtest"
+	"golang.org/x/tools/gopls/internal/lsp/tests/compare"
 )
 
 const internalDefinition = `
@@ -38,12 +38,150 @@ const message = "Hello World."
 func TestGoToInternalDefinition(t *testing.T) {
 	Run(t, internalDefinition, func(t *testing.T, env *Env) {
 		env.OpenFile("main.go")
-		name, pos := env.GoToDefinition("main.go", env.RegexpSearch("main.go", "message"))
+		loc := env.GoToDefinition(env.RegexpSearch("main.go", "message"))
+		name := env.Sandbox.Workdir.URIToPath(loc.URI)
 		if want := "const.go"; name != want {
 			t.Errorf("GoToDefinition: got file %q, want %q", name, want)
 		}
-		if want := env.RegexpSearch("const.go", "message"); pos != want {
-			t.Errorf("GoToDefinition: got position %v, want %v", pos, want)
+		if want := env.RegexpSearch("const.go", "message"); loc != want {
+			t.Errorf("GoToDefinition: got location %v, want %v", loc, want)
+		}
+	})
+}
+
+const linknameDefinition = `
+-- go.mod --
+module mod.com
+
+-- upper/upper.go --
+package upper
+
+import (
+	_ "unsafe"
+
+	_ "mod.com/middle"
+)
+
+//go:linkname foo mod.com/lower.bar
+func foo() string
+
+-- middle/middle.go --
+package middle
+
+import (
+	_ "mod.com/lower"
+)
+
+-- lower/lower.s --
+
+-- lower/lower.go --
+package lower
+
+func bar() string {
+	return "bar as foo"
+}`
+
+func TestGoToLinknameDefinition(t *testing.T) {
+	Run(t, linknameDefinition, func(t *testing.T, env *Env) {
+		env.OpenFile("upper/upper.go")
+
+		// Jump from directives 2nd arg.
+		start := env.RegexpSearch("upper/upper.go", `lower.bar`)
+		loc := env.GoToDefinition(start)
+		name := env.Sandbox.Workdir.URIToPath(loc.URI)
+		if want := "lower/lower.go"; name != want {
+			t.Errorf("GoToDefinition: got file %q, want %q", name, want)
+		}
+		if want := env.RegexpSearch("lower/lower.go", `bar`); loc != want {
+			t.Errorf("GoToDefinition: got position %v, want %v", loc, want)
+		}
+	})
+}
+
+const linknameDefinitionReverse = `
+-- go.mod --
+module mod.com
+
+-- upper/upper.s --
+
+-- upper/upper.go --
+package upper
+
+import (
+	_ "mod.com/middle"
+)
+
+func foo() string
+
+-- middle/middle.go --
+package middle
+
+import (
+	_ "mod.com/lower"
+)
+
+-- lower/lower.go --
+package lower
+
+import _ "unsafe"
+
+//go:linkname bar mod.com/upper.foo
+func bar() string {
+	return "bar as foo"
+}`
+
+func TestGoToLinknameDefinitionInReverseDep(t *testing.T) {
+	Run(t, linknameDefinitionReverse, func(t *testing.T, env *Env) {
+		env.OpenFile("lower/lower.go")
+
+		// Jump from directives 2nd arg.
+		start := env.RegexpSearch("lower/lower.go", `upper.foo`)
+		loc := env.GoToDefinition(start)
+		name := env.Sandbox.Workdir.URIToPath(loc.URI)
+		if want := "upper/upper.go"; name != want {
+			t.Errorf("GoToDefinition: got file %q, want %q", name, want)
+		}
+		if want := env.RegexpSearch("upper/upper.go", `foo`); loc != want {
+			t.Errorf("GoToDefinition: got position %v, want %v", loc, want)
+		}
+	})
+}
+
+// The linkname directive connects two packages not related in the import graph.
+const linknameDefinitionDisconnected = `
+-- go.mod --
+module mod.com
+
+-- a/a.go --
+package a
+
+import (
+	_ "unsafe"
+)
+
+//go:linkname foo mod.com/b.bar
+func foo() string
+
+-- b/b.go --
+package b
+
+func bar() string {
+	return "bar as foo"
+}`
+
+func TestGoToLinknameDefinitionDisconnected(t *testing.T) {
+	Run(t, linknameDefinitionDisconnected, func(t *testing.T, env *Env) {
+		env.OpenFile("a/a.go")
+
+		// Jump from directives 2nd arg.
+		start := env.RegexpSearch("a/a.go", `b.bar`)
+		loc := env.GoToDefinition(start)
+		name := env.Sandbox.Workdir.URIToPath(loc.URI)
+		if want := "b/b.go"; name != want {
+			t.Errorf("GoToDefinition: got file %q, want %q", name, want)
+		}
+		if want := env.RegexpSearch("b/b.go", `bar`); loc != want {
+			t.Errorf("GoToDefinition: got position %v, want %v", loc, want)
 		}
 	})
 }
@@ -65,19 +203,21 @@ func main() {
 func TestGoToStdlibDefinition_Issue37045(t *testing.T) {
 	Run(t, stdlibDefinition, func(t *testing.T, env *Env) {
 		env.OpenFile("main.go")
-		name, pos := env.GoToDefinition("main.go", env.RegexpSearch("main.go", `fmt.(Printf)`))
+		loc := env.GoToDefinition(env.RegexpSearch("main.go", `fmt.(Printf)`))
+		name := env.Sandbox.Workdir.URIToPath(loc.URI)
 		if got, want := path.Base(name), "print.go"; got != want {
 			t.Errorf("GoToDefinition: got file %q, want %q", name, want)
 		}
 
 		// Test that we can jump to definition from outside our workspace.
 		// See golang.org/issues/37045.
-		newName, newPos := env.GoToDefinition(name, pos)
+		newLoc := env.GoToDefinition(loc)
+		newName := env.Sandbox.Workdir.URIToPath(newLoc.URI)
 		if newName != name {
 			t.Errorf("GoToDefinition is not idempotent: got %q, want %q", newName, name)
 		}
-		if newPos != pos {
-			t.Errorf("GoToDefinition is not idempotent: got %v, want %v", newPos, pos)
+		if newLoc != loc {
+			t.Errorf("GoToDefinition is not idempotent: got %v, want %v", newLoc, loc)
 		}
 	})
 }
@@ -85,24 +225,24 @@ func TestGoToStdlibDefinition_Issue37045(t *testing.T) {
 func TestUnexportedStdlib_Issue40809(t *testing.T) {
 	Run(t, stdlibDefinition, func(t *testing.T, env *Env) {
 		env.OpenFile("main.go")
-		name, _ := env.GoToDefinition("main.go", env.RegexpSearch("main.go", `fmt.(Printf)`))
-		env.OpenFile(name)
+		loc := env.GoToDefinition(env.RegexpSearch("main.go", `fmt.(Printf)`))
+		name := env.Sandbox.Workdir.URIToPath(loc.URI)
 
-		pos := env.RegexpSearch(name, `:=\s*(newPrinter)\(\)`)
+		loc = env.RegexpSearch(name, `:=\s*(newPrinter)\(\)`)
 
 		// Check that we can find references on a reference
-		refs := env.References(name, pos)
+		refs := env.References(loc)
 		if len(refs) < 5 {
 			t.Errorf("expected 5+ references to newPrinter, found: %#v", refs)
 		}
 
-		name, pos = env.GoToDefinition(name, pos)
-		content, _ := env.Hover(name, pos)
+		loc = env.GoToDefinition(loc)
+		content, _ := env.Hover(loc)
 		if !strings.Contains(content.Value, "newPrinter") {
 			t.Fatal("definition of newPrinter went to the incorrect place")
 		}
 		// And on the definition too.
-		refs = env.References(name, pos)
+		refs = env.References(loc)
 		if len(refs) < 5 {
 			t.Errorf("expected 5+ references to newPrinter, found: %#v", refs)
 		}
@@ -126,13 +266,13 @@ func main() {
 }`
 	Run(t, mod, func(t *testing.T, env *Env) {
 		env.OpenFile("main.go")
-		content, _ := env.Hover("main.go", env.RegexpSearch("main.go", "Error"))
+		content, _ := env.Hover(env.RegexpSearch("main.go", "Error"))
 		if content == nil {
 			t.Fatalf("nil hover content for Error")
 		}
 		want := "```go\nfunc (error).Error() string\n```"
 		if content.Value != want {
-			t.Fatalf("hover failed:\n%s", tests.Diff(t, want, content.Value))
+			t.Fatalf("hover failed:\n%s", compare.Text(want, content.Value))
 		}
 	})
 }
@@ -152,24 +292,19 @@ func main() {}
 `
 	for _, tt := range []struct {
 		wantLinks      int
-		wantDef        bool
 		importShortcut string
 	}{
-		{1, false, "Link"},
-		{0, true, "Definition"},
-		{1, true, "Both"},
+		{1, "Link"},
+		{0, "Definition"},
+		{1, "Both"},
 	} {
 		t.Run(tt.importShortcut, func(t *testing.T) {
 			WithOptions(
-				EditorConfig{
-					ImportShortcut: tt.importShortcut,
-				},
+				Settings{"importShortcut": tt.importShortcut},
 			).Run(t, mod, func(t *testing.T, env *Env) {
 				env.OpenFile("main.go")
-				file, pos := env.GoToDefinition("main.go", env.RegexpSearch("main.go", `"fmt"`))
-				if !tt.wantDef && (file != "" || pos != (fake.Pos{})) {
-					t.Fatalf("expected no definition, got one: %s:%v", file, pos)
-				} else if tt.wantDef && file == "" && pos == (fake.Pos{}) {
+				loc := env.GoToDefinition(env.RegexpSearch("main.go", `"fmt"`))
+				if loc == (protocol.Location{}) {
 					t.Fatalf("expected definition, got none")
 				}
 				links := env.DocumentLink("main.go")
@@ -216,7 +351,7 @@ func main() {}
 			Run(t, mod, func(t *testing.T, env *Env) {
 				env.OpenFile("main.go")
 
-				_, pos, err := env.Editor.GoToTypeDefinition(env.Ctx, "main.go", env.RegexpSearch("main.go", tt.re))
+				loc, err := env.Editor.GoToTypeDefinition(env.Ctx, env.RegexpSearch("main.go", tt.re))
 				if tt.wantError {
 					if err == nil {
 						t.Fatal("expected error, got nil")
@@ -227,19 +362,39 @@ func main() {}
 					t.Fatalf("expected nil error, got %s", err)
 				}
 
-				typePos := env.RegexpSearch("main.go", tt.wantTypeRe)
-				if pos != typePos {
-					t.Errorf("invalid pos: want %+v, got %+v", typePos, pos)
+				typeLoc := env.RegexpSearch("main.go", tt.wantTypeRe)
+				if loc != typeLoc {
+					t.Errorf("invalid pos: want %+v, got %+v", typeLoc, loc)
 				}
 			})
 		})
 	}
 }
 
+func TestGoToTypeDefinition_Issue60544(t *testing.T) {
+	const mod = `
+-- go.mod --
+module mod.com
+
+go 1.19
+-- main.go --
+package main
+
+func F[T comparable]() {}
+`
+
+	Run(t, mod, func(t *testing.T, env *Env) {
+		env.OpenFile("main.go")
+
+		_, err := env.Editor.GoToTypeDefinition(env.Ctx, env.RegexpSearch("main.go", "comparable")) // must not panic
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
 // Test for golang/go#47825.
 func TestImportTestVariant(t *testing.T) {
-	testenv.NeedsGo1Point(t, 13)
-
 	const mod = `
 -- go.mod --
 module mod.com
@@ -274,6 +429,106 @@ package client
 `
 	Run(t, mod, func(t *testing.T, env *Env) {
 		env.OpenFile("client/client_role_test.go")
-		env.GoToDefinition("client/client_role_test.go", env.RegexpSearch("client/client_role_test.go", "RoleSetup"))
+		env.GoToDefinition(env.RegexpSearch("client/client_role_test.go", "RoleSetup"))
+	})
+}
+
+// This test exercises a crashing pattern from golang/go#49223.
+func TestGoToCrashingDefinition_Issue49223(t *testing.T) {
+	Run(t, "", func(t *testing.T, env *Env) {
+		params := &protocol.DefinitionParams{}
+		params.TextDocument.URI = protocol.DocumentURI("fugitive%3A///Users/user/src/mm/ems/.git//0/pkg/domain/treasury/provider.go")
+		params.Position.Character = 18
+		params.Position.Line = 0
+		env.Editor.Server.Definition(env.Ctx, params)
+	})
+}
+
+// TestVendoringInvalidatesMetadata ensures that gopls uses the
+// correct metadata even after an external 'go mod vendor' command
+// causes packages to move; see issue #55995.
+// See also TestImplementationsInVendor, which tests the same fix.
+func TestVendoringInvalidatesMetadata(t *testing.T) {
+	t.Skip("golang/go#56169: file watching does not capture vendor dirs")
+
+	const proxy = `
+-- other.com/b@v1.0.0/go.mod --
+module other.com/b
+go 1.14
+
+-- other.com/b@v1.0.0/b.go --
+package b
+const K = 0
+`
+	const src = `
+-- go.mod --
+module example.com/a
+go 1.14
+require other.com/b v1.0.0
+
+-- go.sum --
+other.com/b v1.0.0 h1:1wb3PMGdet5ojzrKl+0iNksRLnOM9Jw+7amBNqmYwqk=
+other.com/b v1.0.0/go.mod h1:TgHQFucl04oGT+vrUm/liAzukYHNxCwKNkQZEyn3m9g=
+
+-- a.go --
+package a
+import "other.com/b"
+const _ = b.K
+
+`
+	WithOptions(
+		ProxyFiles(proxy),
+		Modes(Default), // fails in 'experimental' mode
+	).Run(t, src, func(t *testing.T, env *Env) {
+		// Enable to debug go.sum mismatch, which may appear as
+		// "module lookup disabled by GOPROXY=off", confusingly.
+		if false {
+			env.DumpGoSum(".")
+		}
+
+		env.OpenFile("a.go")
+		refLoc := env.RegexpSearch("a.go", "K") // find "b.K" reference
+
+		// Initially, b.K is defined in the module cache.
+		gotLoc := env.GoToDefinition(refLoc)
+		gotFile := env.Sandbox.Workdir.URIToPath(gotLoc.URI)
+		wantCache := filepath.ToSlash(env.Sandbox.GOPATH()) + "/pkg/mod/other.com/b@v1.0.0/b.go"
+		if gotFile != wantCache {
+			t.Errorf("GoToDefinition, before: got file %q, want %q", gotFile, wantCache)
+		}
+
+		// Run 'go mod vendor' outside the editor.
+		if err := env.Sandbox.RunGoCommand(env.Ctx, ".", "mod", []string{"vendor"}, nil, true); err != nil {
+			t.Fatalf("go mod vendor: %v", err)
+		}
+
+		// Synchronize changes to watched files.
+		env.Await(env.DoneWithChangeWatchedFiles())
+
+		// Now, b.K is defined in the vendor tree.
+		gotLoc = env.GoToDefinition(refLoc)
+		wantVendor := "vendor/other.com/b/b.go"
+		if gotFile != wantVendor {
+			t.Errorf("GoToDefinition, after go mod vendor: got file %q, want %q", gotFile, wantVendor)
+		}
+
+		// Delete the vendor tree.
+		if err := os.RemoveAll(env.Sandbox.Workdir.AbsPath("vendor")); err != nil {
+			t.Fatal(err)
+		}
+		// Notify the server of the deletion.
+		if err := env.Sandbox.Workdir.CheckForFileChanges(env.Ctx); err != nil {
+			t.Fatal(err)
+		}
+
+		// Synchronize again.
+		env.Await(env.DoneWithChangeWatchedFiles())
+
+		// b.K is once again defined in the module cache.
+		gotLoc = env.GoToDefinition(gotLoc)
+		gotFile = env.Sandbox.Workdir.URIToPath(gotLoc.URI)
+		if gotFile != wantCache {
+			t.Errorf("GoToDefinition, after rm -rf vendor: got file %q, want %q", gotFile, wantCache)
+		}
 	})
 }

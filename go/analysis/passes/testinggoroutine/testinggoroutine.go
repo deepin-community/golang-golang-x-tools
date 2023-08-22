@@ -5,31 +5,23 @@
 package testinggoroutine
 
 import (
+	_ "embed"
 	"go/ast"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/inspect"
 	"golang.org/x/tools/go/analysis/passes/internal/analysisutil"
 	"golang.org/x/tools/go/ast/inspector"
+	"golang.org/x/tools/internal/typeparams"
 )
 
-const Doc = `report calls to (*testing.T).Fatal from goroutines started by a test.
-
-Functions that abruptly terminate a test, such as the Fatal, Fatalf, FailNow, and
-Skip{,f,Now} methods of *testing.T, must be called from the test goroutine itself.
-This checker detects calls to these functions that occur within a goroutine
-started by the test. For example:
-
-func TestFoo(t *testing.T) {
-    go func() {
-        t.Fatal("oops") // error: (*T).Fatal called from non-test goroutine
-    }()
-}
-`
+//go:embed doc.go
+var doc string
 
 var Analyzer = &analysis.Analyzer{
 	Name:     "testinggoroutine",
-	Doc:      Doc,
+	Doc:      analysisutil.MustExtractDoc(doc, "testinggoroutine"),
+	URL:      "https://pkg.go.dev/golang.org/x/tools/go/analysis/passes/testinggoroutine",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      run,
 }
@@ -124,14 +116,25 @@ func typeIsTestingDotTOrB(expr ast.Expr) (string, bool) {
 // function literals declared in the same function, and
 // static calls within the same package are supported.
 func goStmtFun(goStmt *ast.GoStmt) ast.Node {
-	switch goStmt.Call.Fun.(type) {
-	case *ast.Ident:
-		id := goStmt.Call.Fun.(*ast.Ident)
-		// TODO(cuonglm): improve this once golang/go#48141 resolved.
+	switch fun := goStmt.Call.Fun.(type) {
+	case *ast.IndexExpr, *typeparams.IndexListExpr:
+		x, _, _, _ := typeparams.UnpackIndexExpr(fun)
+		id, _ := x.(*ast.Ident)
+		if id == nil {
+			break
+		}
 		if id.Obj == nil {
 			break
 		}
 		if funDecl, ok := id.Obj.Decl.(ast.Node); ok {
+			return funDecl
+		}
+	case *ast.Ident:
+		// TODO(cuonglm): improve this once golang/go#48141 resolved.
+		if fun.Obj == nil {
+			break
+		}
+		if funDecl, ok := fun.Obj.Decl.(ast.Node); ok {
 			return funDecl
 		}
 	case *ast.FuncLit:

@@ -12,6 +12,7 @@ import (
 	"golang.org/x/tools/go/callgraph"
 	"golang.org/x/tools/go/ssa"
 	"golang.org/x/tools/go/types/typeutil"
+	"golang.org/x/tools/internal/typeparams"
 )
 
 // node interface for VTA nodes.
@@ -175,9 +176,10 @@ func (f function) String() string {
 // We merge such constructs into a single node for simplicity and without
 // much precision sacrifice as such variables are rare in practice. Both
 // a and b would be represented as the same PtrInterface(I) node in:
-//   type I interface
-//   var a ***I
-//   var b **I
+//
+//	type I interface
+//	var a ***I
+//	var b **I
 type nestedPtrInterface struct {
 	typ types.Type
 }
@@ -195,8 +197,9 @@ func (l nestedPtrInterface) String() string {
 // constructs into a single node for simplicity and without much precision
 // sacrifice as such variables are rare in practice. Both a and b would be
 // represented as the same PtrFunction(func()) node in:
-//   var a *func()
-//   var b **func()
+//
+//	var a *func()
+//	var b **func()
 type nestedPtrFunction struct {
 	typ types.Type
 }
@@ -325,14 +328,16 @@ func (b *builder) instr(instr ssa.Instruction) {
 		// change type command a := A(b) results in a and b being the
 		// same value. For concrete type A, there is no interesting flow.
 		//
-		// Note: When A is an interface, most interface casts are handled
+		// When A is an interface, most interface casts are handled
 		// by the ChangeInterface instruction. The relevant case here is
 		// when converting a pointer to an interface type. This can happen
 		// when the underlying interfaces have the same method set.
-		//   type I interface{ foo() }
-		//   type J interface{ foo() }
-		//   var b *I
-		//   a := (*J)(b)
+		//
+		//	type I interface{ foo() }
+		//	type J interface{ foo() }
+		//	var b *I
+		//	a := (*J)(b)
+		//
 		// When this happens we add flows between a <--> b.
 		b.addInFlowAliasEdges(b.nodeFromVal(i), b.nodeFromVal(i.X))
 	case *ssa.TypeAssert:
@@ -371,6 +376,8 @@ func (b *builder) instr(instr ssa.Instruction) {
 		// SliceToArrayPointer: t1 = slice to array pointer *[4]T <- []T (t0)
 		// No interesting flow as sliceArrayElem(t1) == sliceArrayElem(t0).
 		return
+	case *ssa.MultiConvert:
+		b.multiconvert(i)
 	default:
 		panic(fmt.Sprintf("unsupported instruction %v\n", instr))
 	}
@@ -441,7 +448,9 @@ func (b *builder) send(s *ssa.Send) {
 }
 
 // selekt generates flows for select statement
-//   a = select blocking/nonblocking [c_1 <- t_1, c_2 <- t_2, ..., <- o_1, <- o_2, ...]
+//
+//	a = select blocking/nonblocking [c_1 <- t_1, c_2 <- t_2, ..., <- o_1, <- o_2, ...]
+//
 // between receiving channel registers c_i and corresponding input register t_i. Further,
 // flows are generated between o_i and a[2 + i]. Note that a is a tuple register of type
 // <int, bool, r_1, r_2, ...> where the type of r_i is the element type of channel o_i.
@@ -544,8 +553,9 @@ func (b *builder) closure(c *ssa.MakeClosure) {
 // panic creates a flow from arguments to panic instructions to return
 // registers of all recover statements in the program. Introduces a
 // global panic node Panic and
-//  1) for every panic statement p: add p -> Panic
-//  2) for every recover statement r: add Panic -> r (handled in call)
+//  1. for every panic statement p: add p -> Panic
+//  2. for every recover statement r: add Panic -> r (handled in call)
+//
 // TODO(zpavlinovic): improve precision by explicitly modeling how panic
 // values flow from callees to callers and into deferred recover instructions.
 func (b *builder) panic(p *ssa.Panic) {
@@ -563,7 +573,9 @@ func (b *builder) panic(p *ssa.Panic) {
 func (b *builder) call(c ssa.CallInstruction) {
 	// When c is r := recover() call register instruction, we add Recover -> r.
 	if bf, ok := c.Common().Value.(*ssa.Builtin); ok && bf.Name() == "recover" {
-		b.addInFlowEdge(recoverReturn{}, b.nodeFromVal(c.(*ssa.Call)))
+		if v, ok := c.(ssa.Value); ok {
+			b.addInFlowEdge(recoverReturn{}, b.nodeFromVal(v))
+		}
 		return
 	}
 
@@ -573,11 +585,26 @@ func (b *builder) call(c ssa.CallInstruction) {
 }
 
 func addArgumentFlows(b *builder, c ssa.CallInstruction, f *ssa.Function) {
+	// When f has no paremeters (including receiver), there is no type
+	// flow here. Also, f's body and parameters might be missing, such
+	// as when vta is used within the golang.org/x/tools/go/analysis
+	// framework (see github.com/golang/go/issues/50670).
+	if len(f.Params) == 0 {
+		return
+	}
 	cc := c.Common()
-	// When c is an unresolved method call (cc.Method != nil), cc.Value contains
-	// the receiver object rather than cc.Args[0].
 	if cc.Method != nil {
-		b.addInFlowAliasEdges(b.nodeFromVal(f.Params[0]), b.nodeFromVal(cc.Value))
+		// In principle we don't add interprocedural flows for receiver
+		// objects. At a call site, the receiver object is interface
+		// while the callee object is concrete. The flow from interface
+		// to concrete type in general does not make sense. The exception
+		// is when the concrete type is a named function type (see #57756).
+		//
+		// The flow other way around would bake in information from the
+		// initial call graph.
+		if isFunction(f.Params[0].Type()) {
+			b.addInFlowEdge(b.nodeFromVal(cc.Value), b.nodeFromVal(f.Params[0]))
+		}
 	}
 
 	offset := 0
@@ -585,6 +612,14 @@ func addArgumentFlows(b *builder, c ssa.CallInstruction, f *ssa.Function) {
 		offset = 1
 	}
 	for i, v := range cc.Args {
+		// Parameters of f might not be available, as in the case
+		// when vta is used within the golang.org/x/tools/go/analysis
+		// framework (see github.com/golang/go/issues/50670).
+		//
+		// TODO: investigate other cases of missing body and parameters
+		if len(f.Params) <= i+offset {
+			return
+		}
 		b.addInFlowAliasEdges(b.nodeFromVal(f.Params[i+offset]), b.nodeFromVal(v))
 	}
 }
@@ -623,9 +658,74 @@ func addReturnFlows(b *builder, r *ssa.Return, site ssa.Value) {
 	}
 }
 
+func (b *builder) multiconvert(c *ssa.MultiConvert) {
+	// TODO(zpavlinovic): decide what to do on MultiConvert long term.
+	// TODO(zpavlinovic): add unit tests.
+	typeSetOf := func(typ types.Type) []*typeparams.Term {
+		// This is a adaptation of x/exp/typeparams.NormalTerms which x/tools cannot depend on.
+		var terms []*typeparams.Term
+		var err error
+		switch typ := typ.(type) {
+		case *typeparams.TypeParam:
+			terms, err = typeparams.StructuralTerms(typ)
+		case *typeparams.Union:
+			terms, err = typeparams.UnionTermSet(typ)
+		case *types.Interface:
+			terms, err = typeparams.InterfaceTermSet(typ)
+		default:
+			// Common case.
+			// Specializing the len=1 case to avoid a slice
+			// had no measurable space/time benefit.
+			terms = []*typeparams.Term{typeparams.NewTerm(false, typ)}
+		}
+
+		if err != nil {
+			return nil
+		}
+		return terms
+	}
+	// isValuePreserving returns true if a conversion from ut_src to
+	// ut_dst is value-preserving, i.e. just a change of type.
+	// Precondition: neither argument is a named type.
+	isValuePreserving := func(ut_src, ut_dst types.Type) bool {
+		// Identical underlying types?
+		if types.IdenticalIgnoreTags(ut_dst, ut_src) {
+			return true
+		}
+
+		switch ut_dst.(type) {
+		case *types.Chan:
+			// Conversion between channel types?
+			_, ok := ut_src.(*types.Chan)
+			return ok
+
+		case *types.Pointer:
+			// Conversion between pointers with identical base types?
+			_, ok := ut_src.(*types.Pointer)
+			return ok
+		}
+		return false
+	}
+	dst_terms := typeSetOf(c.Type())
+	src_terms := typeSetOf(c.X.Type())
+	for _, s := range src_terms {
+		us := s.Type().Underlying()
+		for _, d := range dst_terms {
+			ud := d.Type().Underlying()
+			if isValuePreserving(us, ud) {
+				// This is equivalent to a ChangeType.
+				b.addInFlowAliasEdges(b.nodeFromVal(c), b.nodeFromVal(c.X))
+				return
+			}
+			// This is equivalent to either: SliceToArrayPointer,,
+			// SliceToArrayPointer+Deref, Size 0 Array constant, or a Convert.
+		}
+	}
+}
+
 // addInFlowEdge adds s -> d to g if d is node that can have an inflow, i.e., a node
 // that represents an interface or an unresolved function value. Otherwise, there
-// is no interesting type flow so the edge is ommited.
+// is no interesting type flow so the edge is omitted.
 func (b *builder) addInFlowEdge(s, d node) {
 	if hasInFlow(d) {
 		b.graph.addEdge(b.representative(s), b.representative(d))
@@ -634,7 +734,7 @@ func (b *builder) addInFlowEdge(s, d node) {
 
 // Creates const, pointer, global, func, and local nodes based on register instructions.
 func (b *builder) nodeFromVal(val ssa.Value) node {
-	if p, ok := val.Type().(*types.Pointer); ok && !isInterface(p.Elem()) && !isFunction(p.Elem()) {
+	if p, ok := val.Type().(*types.Pointer); ok && !types.IsInterface(p.Elem()) && !isFunction(p.Elem()) {
 		// Nested pointer to interfaces are modeled as a special
 		// nestedPtrInterface node.
 		if i := interfaceUnderPtr(p.Elem()); i != nil {
@@ -661,14 +761,15 @@ func (b *builder) nodeFromVal(val ssa.Value) node {
 	default:
 		panic(fmt.Errorf("unsupported value %v in node creation", val))
 	}
-	return nil
 }
 
 // representative returns a unique representative for node `n`. Since
 // semantically equivalent types can have different implementations,
 // this method guarantees the same implementation is always used.
 func (b *builder) representative(n node) node {
-	if !hasInitialTypes(n) {
+	if n.Type() == nil {
+		// panicArg and recoverReturn do not have
+		// types and are unique by definition.
 		return n
 	}
 	t := canonicalize(n.Type(), &b.canon)

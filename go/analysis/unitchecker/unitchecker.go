@@ -6,13 +6,13 @@
 // driver that analyzes a single compilation unit during a build.
 // It is invoked by a build system such as "go vet":
 //
-//   $ go vet -vettool=$(which vet)
+//	$ go vet -vettool=$(which vet)
 //
 // It supports the following command-line protocol:
 //
-//      -V=full         describe executable               (to the build tool)
-//      -flags          describe flags                    (to the build tool)
-//      foo.cfg         description of compilation unit (from the build tool)
+//	-V=full         describe executable               (to the build tool)
+//	-flags          describe flags                    (to the build tool)
+//	foo.cfg         description of compilation unit (from the build tool)
 //
 // This package does not depend on go/packages.
 // If you need a standalone tool, use multichecker,
@@ -50,7 +50,8 @@ import (
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/internal/analysisflags"
-	"golang.org/x/tools/go/analysis/internal/facts"
+	"golang.org/x/tools/internal/facts"
+	"golang.org/x/tools/internal/typeparams"
 )
 
 // A Config describes a compilation unit to be analyzed.
@@ -61,6 +62,7 @@ type Config struct {
 	Compiler                  string
 	Dir                       string
 	ImportPath                string
+	GoVersion                 string // minimum required Go version, such as "go1.21.0"
 	GoFiles                   []string
 	NonGoFiles                []string
 	IgnoredFiles              []string
@@ -78,11 +80,10 @@ type Config struct {
 //
 // The protocol required by 'go vet -vettool=...' is that the tool must support:
 //
-//      -flags          describe flags in JSON
-//      -V=full         describe executable for build caching
-//      foo.cfg         perform separate modular analyze on the single
-//                      unit described by a JSON config file foo.cfg.
-//
+//	-flags          describe flags in JSON
+//	-V=full         describe executable for build caching
+//	foo.cfg         perform separate modular analyze on the single
+//	                unit described by a JSON config file foo.cfg.
 func Main(analyzers ...*analysis.Analyzer) {
 	progname := filepath.Base(os.Args[0])
 	log.SetFlags(0)
@@ -183,11 +184,6 @@ func readConfig(filename string) (*Config, error) {
 	return cfg, nil
 }
 
-var importerForCompiler = func(_ *token.FileSet, compiler string, lookup importer.Lookup) types.Importer {
-	// broken legacy implementation (https://golang.org/issue/28995)
-	return importer.For(compiler, lookup)
-}
-
 func run(fset *token.FileSet, cfg *Config, analyzers []*analysis.Analyzer) ([]result, error) {
 	// Load, parse, typecheck.
 	var files []*ast.File
@@ -203,7 +199,7 @@ func run(fset *token.FileSet, cfg *Config, analyzers []*analysis.Analyzer) ([]re
 		}
 		files = append(files, f)
 	}
-	compilerImporter := importerForCompiler(fset, cfg.Compiler, func(path string) (io.ReadCloser, error) {
+	compilerImporter := importer.ForCompiler(fset, cfg.Compiler, func(path string) (io.ReadCloser, error) {
 		// path is a resolved package path, not an import path.
 		file, ok := cfg.PackageFile[path]
 		if !ok {
@@ -222,8 +218,9 @@ func run(fset *token.FileSet, cfg *Config, analyzers []*analysis.Analyzer) ([]re
 		return compilerImporter.Import(path)
 	})
 	tc := &types.Config{
-		Importer: importer,
-		Sizes:    types.SizesFor("gc", build.Default.GOARCH), // assume gccgo ≡ gc?
+		Importer:  importer,
+		Sizes:     types.SizesFor("gc", build.Default.GOARCH), // assume gccgo ≡ gc?
+		GoVersion: cfg.GoVersion,
 	}
 	info := &types.Info{
 		Types:      make(map[ast.Expr]types.TypeAndValue),
@@ -233,6 +230,8 @@ func run(fset *token.FileSet, cfg *Config, analyzers []*analysis.Analyzer) ([]re
 		Scopes:     make(map[ast.Node]*types.Scope),
 		Selections: make(map[*ast.SelectorExpr]*types.Selection),
 	}
+	typeparams.InitInstanceInfo(info)
+
 	pkg, err := tc.Check(cfg.ImportPath, fset, files, info)
 	if err != nil {
 		if cfg.SucceedOnTypecheckFailure {
@@ -247,6 +246,10 @@ func run(fset *token.FileSet, cfg *Config, analyzers []*analysis.Analyzer) ([]re
 	// In VetxOnly mode, analyzers are only for their facts,
 	// so we can skip any analysis that neither produces facts
 	// nor depends on any analysis that produces facts.
+	//
+	// TODO(adonovan): fix: the command (and logic!) here are backwards.
+	// It should say "...nor is required by any...". (Issue 443099)
+	//
 	// Also build a map to hold working state and result.
 	type action struct {
 		once        sync.Once
@@ -285,13 +288,13 @@ func run(fset *token.FileSet, cfg *Config, analyzers []*analysis.Analyzer) ([]re
 	analyzers = filtered
 
 	// Read facts from imported packages.
-	read := func(path string) ([]byte, error) {
-		if vetx, ok := cfg.PackageVetx[path]; ok {
+	read := func(pkgPath string) ([]byte, error) {
+		if vetx, ok := cfg.PackageVetx[pkgPath]; ok {
 			return ioutil.ReadFile(vetx)
 		}
 		return nil, nil // no .vetx file, no facts
 	}
-	facts, err := facts.Decode(pkg, read)
+	facts, err := facts.NewDecoder(pkg).Decode(false, read)
 	if err != nil {
 		return nil, err
 	}
@@ -338,6 +341,7 @@ func run(fset *token.FileSet, cfg *Config, analyzers []*analysis.Analyzer) ([]re
 				Pkg:               pkg,
 				TypesInfo:         info,
 				TypesSizes:        tc.Sizes,
+				TypeErrors:        nil, // unitchecker doesn't RunDespiteErrors
 				ResultOf:          inputs,
 				Report:            func(d analysis.Diagnostic) { act.diagnostics = append(act.diagnostics, d) },
 				ImportObjectFact:  facts.ImportObjectFact,
@@ -350,6 +354,16 @@ func run(fset *token.FileSet, cfg *Config, analyzers []*analysis.Analyzer) ([]re
 
 			t0 := time.Now()
 			act.result, act.err = a.Run(pass)
+
+			if act.err == nil { // resolve URLs on diagnostics.
+				for i := range act.diagnostics {
+					if url, uerr := analysisflags.ResolveURL(a, act.diagnostics[i]); uerr == nil {
+						act.diagnostics[i].URL = url
+					} else {
+						act.err = uerr // keep the last error
+					}
+				}
+			}
 			if false {
 				log.Printf("analysis %s = %s", pass, time.Since(t0))
 			}
@@ -379,7 +393,7 @@ func run(fset *token.FileSet, cfg *Config, analyzers []*analysis.Analyzer) ([]re
 		results[i].diagnostics = act.diagnostics
 	}
 
-	data := facts.Encode()
+	data := facts.Encode(false)
 	if err := ioutil.WriteFile(cfg.VetxOutput, data, 0666); err != nil {
 		return nil, fmt.Errorf("failed to write analysis facts: %v", err)
 	}

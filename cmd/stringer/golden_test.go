@@ -10,7 +10,6 @@
 package main
 
 import (
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -452,12 +451,7 @@ func (i Token) String() string {
 func TestGolden(t *testing.T) {
 	testenv.NeedsTool(t, "go")
 
-	dir, err := ioutil.TempDir("", "stringer")
-	if err != nil {
-		t.Error(err)
-	}
-	defer os.RemoveAll(dir)
-
+	dir := t.TempDir()
 	for _, test := range golden {
 		g := Generator{
 			trimPrefix:  test.trimPrefix,
@@ -466,7 +460,7 @@ func TestGolden(t *testing.T) {
 		input := "package test\n" + test.input
 		file := test.name + ".go"
 		absFile := filepath.Join(dir, file)
-		err := ioutil.WriteFile(absFile, []byte(input), 0644)
+		err := os.WriteFile(absFile, []byte(input), 0644)
 		if err != nil {
 			t.Error(err)
 		}

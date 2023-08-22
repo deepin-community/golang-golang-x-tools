@@ -3,6 +3,7 @@ Upstream-Name: x/tools
 Upstream-Contact: https://github.com/golang/go/issues
 Source: https://golang.org/x/tools
 Files-Excluded: cmd/present/static/jquery-ui.js
+                cmd/present/static/jquery.js
                 godoc/static/jquery.js
                 godoc/static/static.go
 

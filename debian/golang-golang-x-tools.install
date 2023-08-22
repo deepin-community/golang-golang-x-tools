@@ -13,8 +13,11 @@ usr/bin/godex
 usr/bin/godoc
 usr/bin/goimports
 usr/bin/golang-authtest
+usr/bin/golang-bisect
 usr/bin/golang-bundle
 usr/bin/golang-cookieauth
+usr/bin/golang-deadcode
+usr/bin/golang-defers
 usr/bin/golang-eg
 usr/bin/golang-fieldalignment
 usr/bin/golang-findcall
@@ -24,11 +27,15 @@ usr/bin/golang-ifaceassert
 usr/bin/golang-lostcancel
 usr/bin/golang-netrcauth
 usr/bin/golang-nilness
+usr/bin/golang-nodecount
+usr/bin/golang-play
 usr/bin/golang-shadow
 usr/bin/golang-stress
 usr/bin/golang-stringintconv
 usr/bin/golang-unmarshal
+usr/bin/golang-unusedresult
 usr/bin/gomvpkg
+usr/bin/gonew
 usr/bin/gopackages
 usr/bin/gorename
 usr/bin/gotype

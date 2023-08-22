@@ -1,11 +1,6 @@
 # These files are only for testing.
-source-contains-prebuilt-binary go/gccgoexportdata/testdata/errors.gox
-source-contains-prebuilt-binary go/internal/gccgoimporter/testdata/escapeinfo.gox
-source-contains-prebuilt-binary go/internal/gccgoimporter/testdata/time.gox
-source-contains-prebuilt-binary go/internal/gccgoimporter/testdata/unicode.gox
-source-contains-prebuilt-binary go/internal/gccgoimporter/testdata/v1reflect.gox
-source-is-missing go/gccgoexportdata/testdata/errors.gox
-source-is-missing go/internal/gccgoimporter/testdata/escapeinfo.gox
-source-is-missing go/internal/gccgoimporter/testdata/time.gox
-source-is-missing go/internal/gccgoimporter/testdata/unicode.gox
-source-is-missing go/internal/gccgoimporter/testdata/v1reflect.gox
+source-is-missing [go/gccgoexportdata/testdata/errors.gox]
+source-is-missing [godoc/static/godoc.html]
+unpack-message-for-orig * ar failed for */internal/gcimporter/testdata/versions/*.a
+unpack-message-for-source ar failed for internal/gcimporter/testdata/versions/*.a
+source-contains-prebuilt-binary [go/gccgoexportdata/testdata/errors.gox]

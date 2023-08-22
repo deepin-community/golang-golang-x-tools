@@ -1,0 +1,23 @@
+From: Shengjing Zhu <zhsj@debian.org>
+Date: Tue, 17 Nov 2020 02:42:24 +0800
+Subject: Skip go/packages TestOverlaysInReplace
+
+Needs go mod
+
+Forwarded: not-needed
+---
+ go/packages/overlay_test.go | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/go/packages/overlay_test.go b/go/packages/overlay_test.go
+index 4318739..3d0923a 100644
+--- a/go/packages/overlay_test.go
++++ b/go/packages/overlay_test.go
+@@ -1040,6 +1040,7 @@ func Hi() {
+ // This does not use go/packagestest because it needs to write a replace
+ // directive with an absolute path in one of the module's go.mod files.
+ func TestOverlaysInReplace(t *testing.T) {
++	t.Skip("needs Go mod")
+ 	testenv.NeedsGoPackages(t)
+ 	t.Parallel()
+ 
