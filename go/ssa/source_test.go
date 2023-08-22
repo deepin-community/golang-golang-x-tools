@@ -24,6 +24,7 @@ import (
 	"golang.org/x/tools/go/loader"
 	"golang.org/x/tools/go/ssa"
 	"golang.org/x/tools/go/ssa/ssautil"
+	"golang.org/x/tools/internal/typeparams"
 )
 
 func TestObjValueLookup(t *testing.T) {
@@ -89,7 +90,7 @@ func TestObjValueLookup(t *testing.T) {
 		return
 	}
 
-	prog := ssautil.CreateProgram(iprog, 0 /*|ssa.PrintFunctions*/)
+	prog := ssautil.CreateProgram(iprog, ssa.BuilderMode(0) /*|ssa.PrintFunctions*/)
 	mainInfo := iprog.Created[0]
 	mainPkg := prog.Package(mainInfo.Pkg)
 	mainPkg.SetDebugMode(true)
@@ -247,7 +248,7 @@ func testValueForExpr(t *testing.T, testfile string) {
 
 	mainInfo := iprog.Created[0]
 
-	prog := ssautil.CreateProgram(iprog, 0)
+	prog := ssautil.CreateProgram(iprog, ssa.BuilderMode(0))
 	mainPkg := prog.Package(mainInfo.Pkg)
 	mainPkg.SetDebugMode(true)
 	mainPkg.Build()
@@ -325,7 +326,6 @@ func testValueForExpr(t *testing.T, testfile string) {
 // findInterval parses input and returns the [start, end) positions of
 // the first occurrence of substr in input.  f==nil indicates failure;
 // an error has already been reported in that case.
-//
 func findInterval(t *testing.T, fset *token.FileSet, input, substr string) (f *ast.File, start, end token.Pos) {
 	f, err := parser.ParseFile(fset, "<input>", input, 0)
 	if err != nil {
@@ -385,6 +385,19 @@ func TestEnclosingFunction(t *testing.T) {
 		  func init() { println(func(){print(900)}) }`,
 			"900", "main.init#1$1"},
 	}
+	if typeparams.Enabled {
+		tests = append(tests, struct {
+			input  string
+			substr string
+			fn     string
+		}{
+			`package main
+			type S[T any] struct{}
+			func (*S[T]) Foo() { println(1000) }
+			type P[T any] struct{ *S[T] }`,
+			"1000", "(*main.S[T]).Foo",
+		})
+	}
 	for _, test := range tests {
 		conf := loader.Config{Fset: token.NewFileSet()}
 		f, start, end := findInterval(t, conf.Fset, test.input, test.substr)
@@ -404,7 +417,7 @@ func TestEnclosingFunction(t *testing.T) {
 			t.Error(err)
 			continue
 		}
-		prog := ssautil.CreateProgram(iprog, 0)
+		prog := ssautil.CreateProgram(iprog, ssa.BuilderMode(0))
 		pkg := prog.Package(iprog.Created[0].Pkg)
 		pkg.Build()
 

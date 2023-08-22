@@ -11,16 +11,20 @@
 // for the most up-to-date documentation.
 package main // import "golang.org/x/tools/gopls"
 
+//go:generate go run doc/generate.go
+
 import (
 	"context"
 	"os"
 
 	"golang.org/x/tools/gopls/internal/hooks"
-	"golang.org/x/tools/internal/lsp/cmd"
+	"golang.org/x/tools/gopls/internal/lsp/cmd"
+	"golang.org/x/tools/gopls/internal/telemetry"
 	"golang.org/x/tools/internal/tool"
 )
 
 func main() {
+	telemetry.Start()
 	ctx := context.Background()
 	tool.Main(ctx, cmd.New("gopls", "", nil, hooks.Options), os.Args[1:])
 }

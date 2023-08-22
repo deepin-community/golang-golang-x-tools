@@ -1,0 +1,65 @@
+From: Shengjing Zhu <zhsj@debian.org>
+Date: Thu, 17 Aug 2023 02:58:46 +0800
+Subject: Disable telemetry in gopls
+
+---
+ gopls/internal/bug/bug.go             | 5 -----
+ gopls/internal/telemetry/telemetry.go | 4 +---
+ 2 files changed, 1 insertion(+), 8 deletions(-)
+
+diff --git a/gopls/internal/bug/bug.go b/gopls/internal/bug/bug.go
+index 7331ba8..236b396 100644
+--- a/gopls/internal/bug/bug.go
++++ b/gopls/internal/bug/bug.go
+@@ -18,8 +18,6 @@ import (
+ 	"sort"
+ 	"sync"
+ 	"time"
+-
+-	"golang.org/x/telemetry/counter"
+ )
+ 
+ // PanicOnBugs controls whether to panic when bugs are reported.
+@@ -65,8 +63,6 @@ func Report(description string) {
+ 	report(description)
+ }
+ 
+-var bugReport = counter.NewStack("gopls/bug", 16)
+-
+ func report(description string) {
+ 	_, file, line, ok := runtime.Caller(2) // all exported reporting functions call report directly
+ 
+@@ -102,7 +98,6 @@ func report(description string) {
+ 	mu.Unlock()
+ 
+ 	if newBug {
+-		bugReport.Inc()
+ 	}
+ 	// Call the handlers outside the critical section since a
+ 	// handler may itself fail and call bug.Report. Since handlers
+diff --git a/gopls/internal/telemetry/telemetry.go b/gopls/internal/telemetry/telemetry.go
+index 67ab45a..badf4b7 100644
+--- a/gopls/internal/telemetry/telemetry.go
++++ b/gopls/internal/telemetry/telemetry.go
+@@ -7,14 +7,12 @@ package telemetry
+ import (
+ 	"os"
+ 
+-	"golang.org/x/telemetry/counter"
+ 	"golang.org/x/tools/gopls/internal/lsp/protocol"
+ )
+ 
+ // Start starts telemetry instrumentation.
+ func Start() {
+ 	if os.Getenv("GOPLS_TELEMETRY_EXP") != "" {
+-		counter.Open()
+ 		// TODO: add upload logic.
+ 	}
+ }
+@@ -48,5 +46,5 @@ func RecordClientInfo(params *protocol.ParamInitialize) {
+ 			client = "gopls/client:sublimetext"
+ 		}
+ 	}
+-	counter.Inc(client)
++	_ = client
+ }

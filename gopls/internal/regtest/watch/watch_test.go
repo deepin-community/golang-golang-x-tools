@@ -7,15 +7,16 @@ package regtest
 import (
 	"testing"
 
+	"golang.org/x/tools/gopls/internal/bug"
 	"golang.org/x/tools/gopls/internal/hooks"
-	. "golang.org/x/tools/internal/lsp/regtest"
+	. "golang.org/x/tools/gopls/internal/lsp/regtest"
 
-	"golang.org/x/tools/internal/lsp/fake"
-	"golang.org/x/tools/internal/lsp/protocol"
-	"golang.org/x/tools/internal/testenv"
+	"golang.org/x/tools/gopls/internal/lsp/fake"
+	"golang.org/x/tools/gopls/internal/lsp/protocol"
 )
 
 func TestMain(m *testing.M) {
+	bug.PanicOnBugs = true
 	Main(m, hooks.Options)
 }
 
@@ -36,12 +37,13 @@ func _() {
 	// diagnostics are updated.
 	t.Run("unopened", func(t *testing.T) {
 		Run(t, pkg, func(t *testing.T, env *Env) {
-			env.Await(
-				env.DiagnosticAtRegexp("a/a.go", "x"),
+			env.OnceMet(
+				InitialWorkspaceLoad,
+				Diagnostics(env.AtRegexp("a/a.go", "x")),
 			)
 			env.WriteWorkspaceFile("a/a.go", `package a; func _() {};`)
-			env.Await(
-				EmptyDiagnostics("a/a.go"),
+			env.AfterChange(
+				NoDiagnostics(ForFile("a/a.go")),
 			)
 		})
 	})
@@ -54,13 +56,11 @@ func _() {
 			// Insert a trivial edit so that we don't automatically update the buffer
 			// (see CL 267577).
 			env.EditBuffer("a/a.go", fake.NewEdit(0, 0, 0, 0, " "))
-			env.Await(env.DoneWithOpen())
+			env.AfterChange()
 			env.WriteWorkspaceFile("a/a.go", `package a; func _() {};`)
-			env.Await(
-				OnceMet(
-					env.DoneWithChangeWatchedFiles(),
-					env.DiagnosticAtRegexp("a/a.go", "x"),
-				))
+			env.AfterChange(
+				Diagnostics(env.AtRegexp("a/a.go", "x")),
+			)
 		})
 	})
 }
@@ -89,10 +89,10 @@ func _() {
 `
 	Run(t, pkg, func(t *testing.T, env *Env) {
 		env.OpenFile("a/a.go")
-		env.Await(env.DoneWithOpen())
+		env.AfterChange()
 		env.WriteWorkspaceFile("b/b.go", `package b; func B() {};`)
-		env.Await(
-			env.DiagnosticAtRegexp("a/a.go", "b.B"),
+		env.AfterChange(
+			Diagnostics(env.AtRegexp("a/a.go", "b.B")),
 		)
 	})
 }
@@ -122,8 +122,9 @@ func _() {
 }
 `
 	Run(t, pkg, func(t *testing.T, env *Env) {
-		env.Await(
-			env.DiagnosticAtRegexp("a/a.go", "x"),
+		env.OnceMet(
+			InitialWorkspaceLoad,
+			Diagnostics(env.AtRegexp("a/a.go", "x")),
 		)
 		env.WriteWorkspaceFiles(map[string]string{
 			"b/b.go": `package b; func B() {};`,
@@ -135,9 +136,9 @@ func _() {
 	b.B()
 }`,
 		})
-		env.Await(
-			EmptyDiagnostics("a/a.go"),
-			NoDiagnostics("b/b.go"),
+		env.AfterChange(
+			NoDiagnostics(ForFile("a/a.go")),
+			NoDiagnostics(ForFile("b/b.go")),
 		)
 	})
 }
@@ -166,10 +167,10 @@ func _() {
 `
 	Run(t, pkg, func(t *testing.T, env *Env) {
 		env.OpenFile("a/a.go")
-		env.Await(env.DoneWithOpen())
+		env.AfterChange()
 		env.RemoveWorkspaceFile("b/b.go")
-		env.Await(
-			env.DiagnosticAtRegexp("a/a.go", "\"mod.com/b\""),
+		env.AfterChange(
+			Diagnostics(env.AtRegexp("a/a.go", "\"mod.com/b\"")),
 		)
 	})
 }
@@ -197,14 +198,13 @@ func _() {
 }
 `
 	Run(t, missing, func(t *testing.T, env *Env) {
-		t.Skip("the initial workspace load fails and never retries")
-
-		env.Await(
-			env.DiagnosticAtRegexp("a/a.go", "\"mod.com/c\""),
+		env.OnceMet(
+			InitialWorkspaceLoad,
+			Diagnostics(env.AtRegexp("a/a.go", "\"mod.com/c\"")),
 		)
 		env.WriteWorkspaceFile("c/c.go", `package c; func C() {};`)
-		env.Await(
-			EmptyDiagnostics("c/c.go"),
+		env.AfterChange(
+			NoDiagnostics(ForFile("a/a.go")),
 		)
 	})
 }
@@ -225,8 +225,8 @@ func _() {}
 	Run(t, original, func(t *testing.T, env *Env) {
 		env.WriteWorkspaceFile("c/c.go", `package c; func C() {};`)
 		env.WriteWorkspaceFile("a/a.go", `package a; import "mod.com/c"; func _() { c.C() }`)
-		env.Await(
-			NoDiagnostics("a/a.go"),
+		env.AfterChange(
+			NoDiagnostics(ForFile("a/a.go")),
 		)
 	})
 }
@@ -246,12 +246,13 @@ func _() {
 }
 `
 	Run(t, pkg, func(t *testing.T, env *Env) {
-		env.Await(
-			env.DiagnosticAtRegexp("a/a.go", "hello"),
+		env.OnceMet(
+			InitialWorkspaceLoad,
+			Diagnostics(env.AtRegexp("a/a.go", "hello")),
 		)
 		env.WriteWorkspaceFile("a/a2.go", `package a; func hello() {};`)
-		env.Await(
-			EmptyDiagnostics("a/a.go"),
+		env.AfterChange(
+			NoDiagnostics(ForFile("a/a.go")),
 		)
 	})
 }
@@ -322,15 +323,12 @@ func _() {
 	t.Run("method before implementation", func(t *testing.T) {
 		Run(t, pkg, func(t *testing.T, env *Env) {
 			env.WriteWorkspaceFile("b/b.go", newMethod)
-			env.Await(
-				OnceMet(
-					env.DoneWithChangeWatchedFiles(),
-					DiagnosticAt("a/a.go", 12, 12),
-				),
+			env.AfterChange(
+				Diagnostics(AtPosition("a/a.go", 12, 12)),
 			)
 			env.WriteWorkspaceFile("a/a.go", implementation)
-			env.Await(
-				EmptyDiagnostics("a/a.go"),
+			env.AfterChange(
+				NoDiagnostics(ForFile("a/a.go")),
 			)
 		})
 	})
@@ -338,15 +336,12 @@ func _() {
 	t.Run("implementation before method", func(t *testing.T) {
 		Run(t, pkg, func(t *testing.T, env *Env) {
 			env.WriteWorkspaceFile("a/a.go", implementation)
-			env.Await(
-				OnceMet(
-					env.DoneWithChangeWatchedFiles(),
-					NoDiagnostics("a/a.go"),
-				),
+			env.AfterChange(
+				NoDiagnostics(ForFile("a/a.go")),
 			)
 			env.WriteWorkspaceFile("b/b.go", newMethod)
-			env.Await(
-				NoDiagnostics("a/a.go"),
+			env.AfterChange(
+				NoDiagnostics(ForFile("a/a.go")),
 			)
 		})
 	})
@@ -357,12 +352,9 @@ func _() {
 				"a/a.go": implementation,
 				"b/b.go": newMethod,
 			})
-			env.Await(
-				OnceMet(
-					env.DoneWithChangeWatchedFiles(),
-					NoDiagnostics("a/a.go"),
-				),
-				NoDiagnostics("b/b.go"),
+			env.AfterChange(
+				NoDiagnostics(ForFile("a/a.go")),
+				NoDiagnostics(ForFile("b/b.go")),
 			)
 		})
 	})
@@ -371,7 +363,6 @@ func _() {
 // Tests golang/go#38498. Delete a file and then force a reload.
 // Assert that we no longer try to load the file.
 func TestDeleteFiles(t *testing.T) {
-	testenv.NeedsGo1Point(t, 13) // Poor overlay support causes problems on 1.12.
 	const pkg = `
 -- go.mod --
 module mod.com
@@ -387,69 +378,59 @@ func _() {
 package a
 `
 	t.Run("close then delete", func(t *testing.T) {
-		WithOptions(EditorConfig{
-			VerboseOutput: true,
-		}).Run(t, pkg, func(t *testing.T, env *Env) {
+		WithOptions(
+			Settings{"verboseOutput": true},
+		).Run(t, pkg, func(t *testing.T, env *Env) {
 			env.OpenFile("a/a.go")
 			env.OpenFile("a/a_unneeded.go")
 			env.Await(
-				OnceMet(
-					env.DoneWithOpen(),
-					LogMatching(protocol.Info, "a_unneeded.go", 1, false),
-				),
+				// Log messages are asynchronous to other events on the LSP stream, so we
+				// can't use OnceMet or AfterChange here.
+				LogMatching(protocol.Info, "a_unneeded.go", 1, false),
 			)
 
 			// Close and delete the open file, mimicking what an editor would do.
 			env.CloseBuffer("a/a_unneeded.go")
 			env.RemoveWorkspaceFile("a/a_unneeded.go")
 			env.RegexpReplace("a/a.go", "var _ int", "fmt.Println(\"\")")
-			env.Await(
-				env.DiagnosticAtRegexp("a/a.go", "fmt"),
+			env.AfterChange(
+				Diagnostics(env.AtRegexp("a/a.go", "fmt")),
 			)
 			env.SaveBuffer("a/a.go")
 			env.Await(
-				OnceMet(
-					env.DoneWithSave(),
-					// There should only be one log message containing
-					// a_unneeded.go, from the initial workspace load, which we
-					// check for earlier. If there are more, there's a bug.
-					LogMatching(protocol.Info, "a_unneeded.go", 1, false),
-				),
-				EmptyDiagnostics("a/a.go"),
+				// There should only be one log message containing
+				// a_unneeded.go, from the initial workspace load, which we
+				// check for earlier. If there are more, there's a bug.
+				LogMatching(protocol.Info, "a_unneeded.go", 1, false),
+				NoDiagnostics(ForFile("a/a.go")),
 			)
 		})
 	})
 
 	t.Run("delete then close", func(t *testing.T) {
 		WithOptions(
-			EditorConfig{VerboseOutput: true},
+			Settings{"verboseOutput": true},
 		).Run(t, pkg, func(t *testing.T, env *Env) {
 			env.OpenFile("a/a.go")
 			env.OpenFile("a/a_unneeded.go")
 			env.Await(
-				OnceMet(
-					env.DoneWithOpen(),
-					LogMatching(protocol.Info, "a_unneeded.go", 1, false),
-				),
+				LogMatching(protocol.Info, "a_unneeded.go", 1, false),
 			)
 
 			// Delete and then close the file.
 			env.RemoveWorkspaceFile("a/a_unneeded.go")
 			env.CloseBuffer("a/a_unneeded.go")
 			env.RegexpReplace("a/a.go", "var _ int", "fmt.Println(\"\")")
-			env.Await(
-				env.DiagnosticAtRegexp("a/a.go", "fmt"),
+			env.AfterChange(
+				Diagnostics(env.AtRegexp("a/a.go", "fmt")),
 			)
 			env.SaveBuffer("a/a.go")
 			env.Await(
-				OnceMet(
-					env.DoneWithSave(),
-					// There should only be one log message containing
-					// a_unneeded.go, from the initial workspace load, which we
-					// check for earlier. If there are more, there's a bug.
-					LogMatching(protocol.Info, "a_unneeded.go", 1, false),
-				),
-				EmptyDiagnostics("a/a.go"),
+				// There should only be one log message containing
+				// a_unneeded.go, from the initial workspace load, which we
+				// check for earlier. If there are more, there's a bug.
+				LogMatching(protocol.Info, "a_unneeded.go", 1, false),
+				NoDiagnostics(ForFile("a/a.go")),
 			)
 		})
 	})
@@ -487,39 +468,11 @@ package a
 func _() {}
 `
 	Run(t, pkg, func(t *testing.T, env *Env) {
-		env.ChangeFilesOnDisk([]fake.FileEvent{
-			{
-				Path: "a/a3.go",
-				Content: `package a
-
-var Hello int
-`,
-				ProtocolEvent: protocol.FileEvent{
-					URI:  env.Sandbox.Workdir.URI("a/a3.go"),
-					Type: protocol.Created,
-				},
-			},
-			{
-				Path: "a/a1.go",
-				ProtocolEvent: protocol.FileEvent{
-					URI:  env.Sandbox.Workdir.URI("a/a1.go"),
-					Type: protocol.Deleted,
-				},
-			},
-			{
-				Path:    "a/a2.go",
-				Content: `package a; func _() {};`,
-				ProtocolEvent: protocol.FileEvent{
-					URI:  env.Sandbox.Workdir.URI("a/a2.go"),
-					Type: protocol.Changed,
-				},
-			},
-		})
-		env.Await(
-			OnceMet(
-				env.DoneWithChangeWatchedFiles(),
-				NoDiagnostics("main.go"),
-			),
+		env.WriteWorkspaceFile("a/a3.go", "package a\n\nvar Hello int\n")
+		env.RemoveWorkspaceFile("a/a1.go")
+		env.WriteWorkspaceFile("a/a2.go", "package a; func _() {};")
+		env.AfterChange(
+			NoDiagnostics(ForFile("main.go")),
 		)
 	})
 }
@@ -563,6 +516,9 @@ module mod.com
 go 1.12
 
 require example.com v1.2.2
+-- go.sum --
+example.com v1.2.3 h1:OnPPkx+rW63kj9pgILsu12MORKhSlnFa3DVRJq1HZ7g=
+example.com v1.2.3/go.mod h1:Y2Rc5rVWjWur0h3pd9aEvK5Pof8YKDANh9gHA2Maujo=
 -- main.go --
 package main
 
@@ -591,26 +547,24 @@ func main() {
 }
 `,
 		})
-		env.Await(
+		env.AfterChange(
 			env.DoneWithChangeWatchedFiles(),
-			NoDiagnostics("main.go"),
+			NoDiagnostics(ForFile("main.go")),
 		)
 	})
 }
 
 // Reproduces golang/go#40340.
-func TestSwitchFromGOPATHToModules(t *testing.T) {
-	testenv.NeedsGo1Point(t, 13)
-
+func TestSwitchFromGOPATHToModuleMode(t *testing.T) {
 	const files = `
 -- foo/blah/blah.go --
 package blah
 
 const Name = ""
--- foo/main.go --
+-- main.go --
 package main
 
-import "blah"
+import "foo/blah"
 
 func main() {
 	_ = blah.Name
@@ -618,29 +572,32 @@ func main() {
 `
 	WithOptions(
 		InGOPATH(),
-		EditorConfig{
-			Env: map[string]string{
-				"GO111MODULE": "auto",
-			},
-		},
-		Modes(Experimental), // module is in a subdirectory
+		Modes(Default), // golang/go#57521: this test is temporarily failing in 'experimental' mode
+		EnvVars{"GO111MODULE": "auto"},
 	).Run(t, files, func(t *testing.T, env *Env) {
-		env.OpenFile("foo/main.go")
-		env.Await(env.DiagnosticAtRegexp("foo/main.go", `"blah"`))
-		if err := env.Sandbox.RunGoCommand(env.Ctx, "foo", "mod", []string{"init", "mod.com"}, true); err != nil {
+		env.OpenFile("main.go")
+		env.AfterChange(
+			NoDiagnostics(ForFile("main.go")),
+		)
+		if err := env.Sandbox.RunGoCommand(env.Ctx, "", "mod", []string{"init", "mod.com"}, nil, true); err != nil {
 			t.Fatal(err)
 		}
-		env.RegexpReplace("foo/main.go", `"blah"`, `"mod.com/blah"`)
-		env.Await(
-			EmptyDiagnostics("foo/main.go"),
+
+		// TODO(golang/go#57558, golang/go#57512): file watching is asynchronous,
+		// and we must wait for the view to be reconstructed before touching
+		// main.go, so that the new view "knows" about main.go. This is a bug, but
+		// awaiting the change here avoids it.
+		env.AfterChange()
+
+		env.RegexpReplace("main.go", `"foo/blah"`, `"mod.com/foo/blah"`)
+		env.AfterChange(
+			NoDiagnostics(ForFile("main.go")),
 		)
 	})
 }
 
 // Reproduces golang/go#40487.
 func TestSwitchFromModulesToGOPATH(t *testing.T) {
-	testenv.NeedsGo1Point(t, 13)
-
 	const files = `
 -- foo/go.mod --
 module mod.com
@@ -661,23 +618,16 @@ func main() {
 `
 	WithOptions(
 		InGOPATH(),
-		EditorConfig{
-			Env: map[string]string{
-				"GO111MODULE": "auto",
-			},
-		},
+		EnvVars{"GO111MODULE": "auto"},
 	).Run(t, files, func(t *testing.T, env *Env) {
 		env.OpenFile("foo/main.go")
 		env.RemoveWorkspaceFile("foo/go.mod")
-		env.Await(
-			OnceMet(
-				env.DoneWithChangeWatchedFiles(),
-				env.DiagnosticAtRegexp("foo/main.go", `"mod.com/blah"`),
-			),
+		env.AfterChange(
+			Diagnostics(env.AtRegexp("foo/main.go", `"mod.com/blah"`)),
 		)
 		env.RegexpReplace("foo/main.go", `"mod.com/blah"`, `"foo/blah"`)
-		env.Await(
-			EmptyDiagnostics("foo/main.go"),
+		env.AfterChange(
+			NoDiagnostics(ForFile("foo/main.go")),
 		)
 	})
 }
@@ -720,15 +670,9 @@ func TestAll(t *testing.T) {
 }
 `,
 		})
-		env.Await(
-			OnceMet(
-				env.DoneWithChangeWatchedFiles(),
-				NoDiagnostics("a/a.go"),
-			),
-			OnceMet(
-				env.DoneWithChangeWatchedFiles(),
-				NoDiagnostics("a/a_test.go"),
-			),
+		env.AfterChange(
+			NoDiagnostics(ForFile("a/a.go")),
+			NoDiagnostics(ForFile("a/a_test.go")),
 		)
 		// Now, add a new file to the test variant and use its symbol in the
 		// original test file. Expect no diagnostics.
@@ -752,15 +696,9 @@ func hi() {}
 func TestSomething(t *testing.T) {}
 `,
 		})
-		env.Await(
-			OnceMet(
-				env.DoneWithChangeWatchedFiles(),
-				NoDiagnostics("a/a_test.go"),
-			),
-			OnceMet(
-				env.DoneWithChangeWatchedFiles(),
-				NoDiagnostics("a/a2_test.go"),
-			),
+		env.AfterChange(
+			NoDiagnostics(ForFile("a/a_test.go")),
+			NoDiagnostics(ForFile("a/a2_test.go")),
 		)
 	})
 }

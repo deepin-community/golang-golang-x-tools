@@ -1,0 +1,28 @@
+From: Shengjing Zhu <zhsj@debian.org>
+Date: Tue, 7 Feb 2023 21:34:43 +0800
+Subject: Skip internal/gcimporter TestStdlib
+
+gopls/doc/generate.go:33:2: cannot find package "github.com/jba/printsrc" in any of:
+        /usr/lib/go-1.19/src/github.com/jba/printsrc (from $GOROOT)
+        /<<PKGBUILDDIR>>/obj-x86_64-linux-gnu/src/github.com/jba/printsrc (from $GOPATH)
+/<<PKGBUILDDIR>>/obj-x86_64-linux-gnu/src/golang.org/x/tools/gopls/doc/generate.go:33:2: could not import github.com/jba/printsrc (invalid package name: "")
+    stdlib_test.go:52: there were errors during loading
+FAIL: TestStdlib (2.61s)
+
+Forwarded: not-needed
+---
+ internal/gcimporter/stdlib_test.go | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/internal/gcimporter/stdlib_test.go b/internal/gcimporter/stdlib_test.go
+index 33ff795..b8f9489 100644
+--- a/internal/gcimporter/stdlib_test.go
++++ b/internal/gcimporter/stdlib_test.go
+@@ -21,6 +21,7 @@ import (
+ // TestStdlib ensures that all packages in std and x/tools can be
+ // type-checked using export data. Takes around 3s.
+ func TestStdlib(t *testing.T) {
++	t.Skip("needs github.com/jba/printsrc")
+ 	testenv.NeedsGoPackages(t)
+ 
+ 	// gcexportdata.Read rapidly consumes FileSet address space,

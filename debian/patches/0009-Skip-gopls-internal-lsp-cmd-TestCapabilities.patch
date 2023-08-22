@@ -1,0 +1,23 @@
+From: Shengjing Zhu <zhsj@debian.org>
+Date: Tue, 7 Feb 2023 21:29:58 +0800
+Subject: Skip gopls/internal/lsp/cmd TestCapabilities
+
+Needs go mod
+
+Forwarded: not-needed
+---
+ gopls/internal/lsp/cmd/capabilities_test.go | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/gopls/internal/lsp/cmd/capabilities_test.go b/gopls/internal/lsp/cmd/capabilities_test.go
+index 6d4e32f..9111121 100644
+--- a/gopls/internal/lsp/cmd/capabilities_test.go
++++ b/gopls/internal/lsp/cmd/capabilities_test.go
+@@ -21,6 +21,7 @@ import (
+ // TestCapabilities does some minimal validation of the server's adherence to the LSP.
+ // The checks in the test are added as changes are made and errors noticed.
+ func TestCapabilities(t *testing.T) {
++	t.Skip("needs Go mod")
+ 	// TODO(bcmills): This test fails on js/wasm, which is not unexpected, but the
+ 	// failure mode is that the DidOpen call below reports "no views in session",
+ 	// which seems a little too cryptic.

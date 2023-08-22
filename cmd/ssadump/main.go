@@ -47,7 +47,7 @@ func init() {
 }
 
 const usage = `SSA builder and interpreter.
-Usage: ssadump [-build=[DBCSNFL]] [-test] [-run] [-interp=[TR]] [-arg=...] package...
+Usage: ssadump [-build=[DBCSNFLG]] [-test] [-run] [-interp=[TR]] [-arg=...] package...
 Use -help flag to display options.
 
 Examples:
@@ -55,7 +55,8 @@ Examples:
 % ssadump -build=F -test fmt             # dump SSA form of a package and its tests
 % ssadump -run -interp=T hello.go        # interpret a program, with tracing
 
-The -run flag causes ssadump to run the first package named main.
+The -run flag causes ssadump to build the code in a runnable form and run the first
+package named main.
 
 Interpretation of the standard "testing" package is no longer supported.
 `
@@ -130,6 +131,11 @@ func doMain() error {
 		return fmt.Errorf("packages contain errors")
 	}
 
+	// Turn on instantiating generics during build if the program will be run.
+	if *runFlag {
+		mode |= ssa.InstantiateGenerics
+	}
+
 	// Create SSA-form program representation.
 	prog, pkgs := ssautil.AllPackages(initial, mode)
 
@@ -151,12 +157,15 @@ func doMain() error {
 		// Build SSA for all packages.
 		prog.Build()
 
-		// The interpreter needs the runtime package.
-		// It is a limitation of go/packages that
-		// we cannot add "runtime" to its initial set,
-		// we can only check that it is present.
-		if prog.ImportedPackage("runtime") == nil {
-			return fmt.Errorf("-run: program does not depend on runtime")
+		// Earlier versions of the interpreter needed the runtime
+		// package; however, interp cannot handle unsafe constructs
+		// used during runtime's package initialization at the moment.
+		// The key construct blocking support is:
+		//    *((*T)(unsafe.Pointer(p)))
+		// Unfortunately, this means only trivial programs can be
+		// interpreted by ssadump.
+		if prog.ImportedPackage("runtime") != nil {
+			return fmt.Errorf("-run: program depends on runtime package (interpreter can run only trivial programs)")
 		}
 
 		if runtime.GOARCH != build.Default.GOARCH {

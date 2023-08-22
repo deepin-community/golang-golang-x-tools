@@ -2,37 +2,48 @@
 # -*- makefile -*-
 
 # Excluded binaries. List all binary names:
-# rg -l -g'!*_test.go' -g'!testdata' '^package main'|xargs dirname|sort -u
+# go list -f '{{ if eq .Name "main" }}{{ .ImportPath }}{{ end }}' ./...
+# (cd gopls && go list -f '{{ if eq .Name "main" }}{{ .ImportPath }}{{ end }}' ./...)
 export DH_GOLANG_EXCLUDES := \
 	cmd/cover \
 	cmd/getgo/server \
+	cmd/signature-fuzzer \
 	gopls/api-diff \
 	gopls/doc \
 	gopls/integration/govim \
 	gopls/internal/coverage \
+	gopls/internal/lsp/helper \
+	gopls/internal/lsp/protocol/generate \
 	gopls/release \
-	internal/lsp/helper \
+	internal/loopclosure \
 	internal/stack/gostacks
 
 # Excluded tests
 export DH_GOLANG_EXCLUDES += \
+	copyright \
 	gopls/internal/regtest \
 	gopls/test
 
 # needed for tests.
-export DH_GOLANG_INSTALL_EXTRA := godoc/static gopls/go.sum
+export DH_GOLANG_INSTALL_EXTRA := \
+	godoc/static \
+	gopls/go.sum \
+	gopls/internal/lsp/cmd/usage
 
 # eg #753978
 # stress #793693
 # bundle #818551
 RENAME_BIN := \
+	bisect \
 	bundle \
+	deadcode \
 	eg \
 	guru \
 	stress
 
 # All go/analysis/*/*/cmd/*
 RENAME_BIN += \
+	defers \
 	fieldalignment \
 	findcall \
 	ifaceassert \
@@ -40,7 +51,8 @@ RENAME_BIN += \
 	nilness \
 	shadow \
 	stringintconv \
-	unmarshal
+	unmarshal \
+	unusedresult
 
 # All cmd/auth/*
 RENAME_BIN += \
@@ -49,11 +61,20 @@ RENAME_BIN += \
 	gitauth \
 	netrcauth
 
+# All go/*/internal/*
+RENAME_BIN += \
+	nodecount \
+	play
+
 execute_after_dh_auto_install:
 	for i in $(RENAME_BIN); \
 	do \
 	    mv debian/tmp/usr/bin/$$i debian/tmp/usr/bin/golang-$$i; \
 	done
+	# gopls can't be not imported by other packages.
+	# remove it to avoid tests in autopkgtest which causes circular
+	# dependencies when updating golang-golang-x-vuln.
+	rm -rvf debian/tmp/usr/share/gocode/src/golang.org/x/tools/gopls
 
 override_dh_auto_test:
 ifeq (,$(findstring gccgo, $(shell go version)))

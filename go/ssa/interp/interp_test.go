@@ -23,14 +23,17 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
+	"unsafe"
 
 	"golang.org/x/tools/go/loader"
 	"golang.org/x/tools/go/ssa"
 	"golang.org/x/tools/go/ssa/interp"
 	"golang.org/x/tools/go/ssa/ssautil"
+	"golang.org/x/tools/internal/typeparams"
 )
 
 // Each line contains a space-separated list of $GOROOT/test/
@@ -109,7 +112,9 @@ var gorootTestTests = []string{
 var testdataTests = []string{
 	"boundmeth.go",
 	"complit.go",
+	"convert.go",
 	"coverage.go",
+	"deepequal.go",
 	"defer.go",
 	"fieldprom.go",
 	"ifaceconv.go",
@@ -121,9 +126,27 @@ var testdataTests = []string{
 	"recover.go",
 	"reflect.go",
 	"static.go",
+	"width32.go",
+
+	"fixedbugs/issue52342.go",
+	"fixedbugs/issue55115.go",
 }
 
-func run(t *testing.T, input string) bool {
+func init() {
+	if typeparams.Enabled {
+		testdataTests = append(testdataTests, "fixedbugs/issue52835.go")
+		testdataTests = append(testdataTests, "fixedbugs/issue55086.go")
+		testdataTests = append(testdataTests, "typeassert.go")
+		testdataTests = append(testdataTests, "zeros.go")
+	}
+
+	// GOROOT/test used to assume that GOOS and GOARCH were explicitly set in the
+	// environment, so do that here for TestGorootTest.
+	os.Setenv("GOOS", runtime.GOOS)
+	os.Setenv("GOARCH", runtime.GOARCH)
+}
+
+func run(t *testing.T, input string, goroot string) {
 	// The recover2 test case is broken on Go 1.14+. See golang/go#34089.
 	// TODO(matloob): Fix this.
 	if filepath.Base(input) == "recover2.go" {
@@ -134,15 +157,17 @@ func run(t *testing.T, input string) bool {
 
 	start := time.Now()
 
-	ctx := build.Default    // copy
-	ctx.GOROOT = "testdata" // fake goroot
-	ctx.GOOS = "linux"
-	ctx.GOARCH = "amd64"
+	ctx := build.Default // copy
+	ctx.GOROOT = goroot
+	ctx.GOOS = runtime.GOOS
+	ctx.GOARCH = runtime.GOARCH
+	if filepath.Base(input) == "width32.go" && unsafe.Sizeof(int(0)) > 4 {
+		t.Skipf("skipping: width32.go checks behavior for a 32-bit int")
+	}
 
 	conf := loader.Config{Build: &ctx}
 	if _, err := conf.FromArgs([]string{input}, true); err != nil {
-		t.Errorf("FromArgs(%s) failed: %s", input, err)
-		return false
+		t.Fatalf("FromArgs(%s) failed: %s", input, err)
 	}
 
 	conf.Import("runtime")
@@ -164,11 +189,12 @@ func run(t *testing.T, input string) bool {
 
 	iprog, err := conf.Load()
 	if err != nil {
-		t.Errorf("conf.Load(%s) failed: %s", input, err)
-		return false
+		t.Fatalf("conf.Load(%s) failed: %s", input, err)
 	}
 
-	prog := ssautil.CreateProgram(iprog, ssa.SanityCheckFunctions)
+	bmode := ssa.InstantiateGenerics | ssa.SanityCheckFunctions
+	// bmode |= ssa.PrintFunctions // enable for debugging
+	prog := ssautil.CreateProgram(iprog, bmode)
 	prog.Build()
 
 	mainPkg := prog.Package(iprog.Created[0].Pkg)
@@ -178,8 +204,15 @@ func run(t *testing.T, input string) bool {
 
 	interp.CapturedOutput = new(bytes.Buffer)
 
+	sizes := types.SizesFor("gc", ctx.GOARCH)
+	if sizes.Sizeof(types.Typ[types.Int]) < 4 {
+		panic("bogus SizesFor")
+	}
 	hint = fmt.Sprintf("To trace execution, run:\n%% go build golang.org/x/tools/cmd/ssadump && ./ssadump -build=C -test -run --interp=T %s\n", input)
-	exitCode := interp.Interpret(mainPkg, 0, &types.StdSizes{WordSize: 8, MaxAlign: 8}, input, []string{})
+	var imode interp.Mode // default mode
+	// imode |= interp.DisableRecover // enable for debugging
+	// imode |= interp.EnableTracing // enable for debugging
+	exitCode := interp.Interpret(mainPkg, imode, sizes, input, []string{})
 	if exitCode != 0 {
 		t.Fatalf("interpreting %s: exit code was %d", input, exitCode)
 	}
@@ -193,43 +226,131 @@ func run(t *testing.T, input string) bool {
 	if false {
 		t.Log(input, time.Since(start)) // test profiling
 	}
-
-	return true
 }
 
-func printFailures(failures []string) {
-	if failures != nil {
-		fmt.Println("The following tests failed:")
-		for _, f := range failures {
-			fmt.Printf("\t%s\n", f)
+// makeGoroot copies testdata/src into the "src" directory of a temporary
+// location to mimic GOROOT/src, and adds a file "runtime/consts.go" containing
+// declarations for GOOS and GOARCH that match the GOOS and GOARCH of this test.
+//
+// It returns the directory that should be used for GOROOT.
+func makeGoroot(t *testing.T) string {
+	goroot := t.TempDir()
+	src := filepath.Join(goroot, "src")
+
+	err := filepath.Walk("testdata/src", func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
 		}
+
+		rel, err := filepath.Rel("testdata/src", path)
+		if err != nil {
+			return err
+		}
+		targ := filepath.Join(src, rel)
+
+		if info.IsDir() {
+			return os.Mkdir(targ, info.Mode().Perm()|0700)
+		}
+
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(targ, b, info.Mode().Perm())
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
+
+	constsGo := fmt.Sprintf(`package runtime
+const GOOS = %q
+const GOARCH = %q
+`, runtime.GOOS, runtime.GOARCH)
+	err = os.WriteFile(filepath.Join(src, "runtime/consts.go"), []byte(constsGo), 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return goroot
 }
 
 // TestTestdataFiles runs the interpreter on testdata/*.go.
 func TestTestdataFiles(t *testing.T) {
+	goroot := makeGoroot(t)
 	cwd, err := os.Getwd()
 	if err != nil {
 		log.Fatal(err)
 	}
-
-	var failures []string
 	for _, input := range testdataTests {
-		if !run(t, filepath.Join(cwd, "testdata", input)) {
-			failures = append(failures, input)
-		}
+		t.Run(input, func(t *testing.T) {
+			run(t, filepath.Join(cwd, "testdata", input), goroot)
+		})
 	}
-	printFailures(failures)
 }
 
 // TestGorootTest runs the interpreter on $GOROOT/test/*.go.
 func TestGorootTest(t *testing.T) {
-	var failures []string
-
+	goroot := makeGoroot(t)
 	for _, input := range gorootTestTests {
-		if !run(t, filepath.Join(build.Default.GOROOT, "test", input)) {
-			failures = append(failures, input)
-		}
+		t.Run(input, func(t *testing.T) {
+			run(t, filepath.Join(build.Default.GOROOT, "test", input), goroot)
+		})
 	}
-	printFailures(failures)
+}
+
+// TestTypeparamTest runs the interpreter on runnable examples
+// in $GOROOT/test/typeparam/*.go.
+
+func TestTypeparamTest(t *testing.T) {
+	if !typeparams.Enabled {
+		return
+	}
+	goroot := makeGoroot(t)
+
+	// Skip known failures for the given reason.
+	// TODO(taking): Address these.
+	skip := map[string]string{
+		"chans.go":      "interp tests do not support runtime.SetFinalizer",
+		"issue23536.go": "unknown reason",
+		"issue48042.go": "interp tests do not handle reflect.Value.SetInt",
+		"issue47716.go": "interp tests do not handle unsafe.Sizeof",
+		"issue50419.go": "interp tests do not handle dispatch to String() correctly",
+		"issue51733.go": "interp does not handle unsafe casts",
+		"ordered.go":    "math.NaN() comparisons not being handled correctly",
+		"orderedmap.go": "interp tests do not support runtime.SetFinalizer",
+		"stringer.go":   "unknown reason",
+		"issue48317.go": "interp tests do not support encoding/json",
+		"issue48318.go": "interp tests do not support encoding/json",
+		"issue58513.go": "interp tests do not support runtime.Caller",
+	}
+	// Collect all of the .go files in dir that are runnable.
+	dir := filepath.Join(build.Default.GOROOT, "test", "typeparam")
+	list, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range list {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") {
+			continue // Consider standalone go files.
+		}
+		t.Run(entry.Name(), func(t *testing.T) {
+			input := filepath.Join(dir, entry.Name())
+			src, err := os.ReadFile(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// Only build test files that can be compiled, or compiled and run.
+			if !bytes.HasPrefix(src, []byte("// run")) || bytes.HasPrefix(src, []byte("// rundir")) {
+				t.Logf("Not a `// run` file: %s", entry.Name())
+				return
+			}
+
+			if reason := skip[entry.Name()]; reason != "" {
+				t.Skipf("skipping: %s", reason)
+			}
+
+			run(t, input, goroot)
+		})
+	}
 }

@@ -50,6 +50,7 @@ import (
 	"index/suffixarray"
 	"io"
 	"log"
+	"math"
 	"os"
 	pathpkg "path"
 	"path/filepath"
@@ -161,7 +162,7 @@ func newKindRun(h RunList) interface{} {
 		// bit is always the same for all infos in one
 		// list we can simply compare the entire info.
 		k := 0
-		prev := SpotInfo(1<<32 - 1) // an unlikely value
+		prev := SpotInfo(math.MaxUint32) // an unlikely value
 		for _, x := range run {
 			if x != prev {
 				run[k] = x
@@ -627,7 +628,7 @@ func (x *Indexer) addFile(f vfs.ReadSeekCloser, filename string, goFile bool) (f
 
 	// The file set's base offset and x.sources size must be in lock-step;
 	// this permits the direct mapping of suffix array lookup results to
-	// to corresponding Pos values.
+	// corresponding Pos values.
 	//
 	// When a file is added to the file set, its offset base increases by
 	// the size of the file + 1; and the initial base offset is 1. Add an
@@ -1359,7 +1360,6 @@ type FileLines struct {
 // LookupRegexp returns the number of matches and the matches where a regular
 // expression r is found in the full text index. At most n matches are
 // returned (thus found <= n).
-//
 func (x *Index) LookupRegexp(r *regexp.Regexp, n int) (found int, result []FileLines) {
 	if x.suffixes == nil || n <= 0 {
 		return
@@ -1422,7 +1422,7 @@ func (x *Index) LookupRegexp(r *regexp.Regexp, n int) (found int, result []FileL
 	return
 }
 
-// InvalidateIndex should be called whenever any of the file systems
+// invalidateIndex should be called whenever any of the file systems
 // under godoc's observation change so that the indexer is kicked on.
 func (c *Corpus) invalidateIndex() {
 	c.fsModified.Set(nil)
@@ -1431,7 +1431,6 @@ func (c *Corpus) invalidateIndex() {
 
 // feedDirnames feeds the directory names of all directories
 // under the file system given by root to channel c.
-//
 func (c *Corpus) feedDirnames(ch chan<- string) {
 	if dir, _ := c.fsTree.Get(); dir != nil {
 		for d := range dir.(*Directory).iter(false) {
@@ -1442,7 +1441,6 @@ func (c *Corpus) feedDirnames(ch chan<- string) {
 
 // fsDirnames() returns a channel sending all directory names
 // of all the file systems under godoc's observation.
-//
 func (c *Corpus) fsDirnames() <-chan string {
 	ch := make(chan string, 256) // buffered for fewer context switches
 	go func() {

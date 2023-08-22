@@ -1,0 +1,53 @@
+From: Shengjing Zhu <zhsj@debian.org>
+Date: Thu, 3 Aug 2023 19:51:16 +0800
+Subject: Set GO111MODULE=auto in tests
+
+---
+ cmd/gonew/main_test.go                           | 2 +-
+ go/analysis/internal/versiontest/version_test.go | 6 +++---
+ 2 files changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/cmd/gonew/main_test.go b/cmd/gonew/main_test.go
+index 590bda0..5a456a9 100644
+--- a/cmd/gonew/main_test.go
++++ b/cmd/gonew/main_test.go
+@@ -83,7 +83,7 @@ func Test(t *testing.T) {
+ 			}
+ 			cmd := exec.Command(exe, args[1:]...)
+ 			cmd.Dir = out
+-			cmd.Env = append(os.Environ(), "TestGonewMain=1", "GOPROXY="+proxyURL, "GOSUMDB=off")
++			cmd.Env = append(os.Environ(), "TestGonewMain=1", "GOPROXY="+proxyURL, "GOSUMDB=off", "GO111MODULE=auto")
+ 			var stdout bytes.Buffer
+ 			var stderr bytes.Buffer
+ 			cmd.Stdout = &stdout
+diff --git a/go/analysis/internal/versiontest/version_test.go b/go/analysis/internal/versiontest/version_test.go
+index 45eef8b..92cf0b2 100644
+--- a/go/analysis/internal/versiontest/version_test.go
++++ b/go/analysis/internal/versiontest/version_test.go
+@@ -66,7 +66,7 @@ func TestMultichecker(t *testing.T) {
+ 	}
+ 	cmd := exec.Command(exe, ".")
+ 	cmd.Dir = testDir(t)
+-	cmd.Env = append(os.Environ(), "VERSIONTEST_MULTICHECKER=1")
++	cmd.Env = append(os.Environ(), "VERSIONTEST_MULTICHECKER=1", "GO111MODULE=auto")
+ 	out, err := cmd.CombinedOutput()
+ 	if err == nil || !strings.Contains(string(out), "x.go:1:1: goversion=go1.20\n") {
+ 		t.Fatalf("multichecker: %v\n%s", err, out)
+@@ -80,7 +80,7 @@ func TestSinglechecker(t *testing.T) {
+ 	}
+ 	cmd := exec.Command(exe, ".")
+ 	cmd.Dir = testDir(t)
+-	cmd.Env = append(os.Environ(), "VERSIONTEST_SINGLECHECKER=1")
++	cmd.Env = append(os.Environ(), "VERSIONTEST_SINGLECHECKER=1", "GO111MODULE=auto")
+ 	out, err := cmd.CombinedOutput()
+ 	if err == nil || !strings.Contains(string(out), "x.go:1:1: goversion=go1.20\n") {
+ 		t.Fatalf("multichecker: %v\n%s", err, out)
+@@ -94,7 +94,7 @@ func TestVettool(t *testing.T) {
+ 	}
+ 	cmd := exec.Command("go", "vet", "-vettool="+exe, ".")
+ 	cmd.Dir = testDir(t)
+-	cmd.Env = append(os.Environ(), "VERSIONTEST_MULTICHECKER=1")
++	cmd.Env = append(os.Environ(), "VERSIONTEST_MULTICHECKER=1", "GO111MODULE=auto")
+ 	out, err := cmd.CombinedOutput()
+ 	if err == nil || !strings.Contains(string(out), "x.go:1:1: goversion=go1.20\n") {
+ 		t.Fatalf("vettool: %v\n%s", err, out)

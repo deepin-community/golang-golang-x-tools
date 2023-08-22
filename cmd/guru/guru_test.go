@@ -172,7 +172,6 @@ func doQuery(out io.Writer, q *query, json bool) {
 
 	var buildContext = build.Default
 	buildContext.GOPATH = "testdata"
-	pkg := filepath.Dir(strings.TrimPrefix(q.filename, "testdata/src/"))
 
 	gopathAbs, _ := filepath.Abs(buildContext.GOPATH)
 
@@ -195,11 +194,9 @@ func doQuery(out io.Writer, q *query, json bool) {
 	}
 
 	query := guru.Query{
-		Pos:        q.queryPos,
-		Build:      &buildContext,
-		Scope:      []string{pkg},
-		Reflection: true,
-		Output:     outputFn,
+		Pos:    q.queryPos,
+		Build:  &buildContext,
+		Output: outputFn,
 	}
 
 	if err := guru.Run(q.verb, &query); err != nil {
@@ -215,6 +212,9 @@ func doQuery(out io.Writer, q *query, json bool) {
 	}
 
 	for _, output := range outputs {
+		// Replace occurrences of interface{} with any, for consistent output
+		// across go 1.18 and earlier.
+		output = strings.ReplaceAll(output, "interface{}", "any")
 		fmt.Fprintf(out, "%s\n", output)
 	}
 
@@ -229,37 +229,28 @@ func TestGuru(t *testing.T) {
 		// TODO: make a lighter version of the tests for short mode?
 		t.Skipf("skipping in short mode")
 	}
-	switch runtime.GOOS {
-	case "android":
-		t.Skipf("skipping test on %q (no testdata dir)", runtime.GOOS)
-	case "windows":
-		t.Skipf("skipping test on %q (no /usr/bin/diff)", runtime.GOOS)
+
+	diffCmd := "/usr/bin/diff"
+	if runtime.GOOS == "plan9" {
+		diffCmd = "/bin/diff"
+	}
+	if _, err := exec.LookPath(diffCmd); err != nil {
+		t.Skipf("skipping test: %v", err)
 	}
 
 	for _, filename := range []string{
 		"testdata/src/alias/alias.go",
-		"testdata/src/calls/main.go",
 		"testdata/src/describe/main.go",
 		"testdata/src/freevars/main.go",
 		"testdata/src/implements/main.go",
 		"testdata/src/implements-methods/main.go",
 		"testdata/src/imports/main.go",
-		"testdata/src/peers/main.go",
-		"testdata/src/pointsto/main.go",
 		"testdata/src/referrers/main.go",
-		"testdata/src/reflection/main.go",
 		"testdata/src/what/main.go",
-		"testdata/src/whicherrs/main.go",
-		"testdata/src/softerrs/main.go",
-		// JSON:
-		// TODO(adonovan): most of these are very similar; combine them.
-		"testdata/src/calls-json/main.go",
-		"testdata/src/peers-json/main.go",
 		"testdata/src/definition-json/main.go",
 		"testdata/src/describe-json/main.go",
 		"testdata/src/implements-json/main.go",
 		"testdata/src/implements-methods-json/main.go",
-		"testdata/src/pointsto-json/main.go",
 		"testdata/src/referrers-json/main.go",
 		"testdata/src/what-json/main.go",
 	} {
@@ -295,9 +286,9 @@ func TestGuru(t *testing.T) {
 			var cmd *exec.Cmd
 			switch runtime.GOOS {
 			case "plan9":
-				cmd = exec.Command("/bin/diff", "-c", golden, got)
+				cmd = exec.Command(diffCmd, "-c", golden, got)
 			default:
-				cmd = exec.Command("/usr/bin/diff", "-u", golden, got)
+				cmd = exec.Command(diffCmd, "-u", golden, got)
 			}
 			testenv.NeedsTool(t, cmd.Path)
 			buf := new(bytes.Buffer)

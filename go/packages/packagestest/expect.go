@@ -16,7 +16,6 @@ import (
 
 	"golang.org/x/tools/go/expect"
 	"golang.org/x/tools/go/packages"
-	"golang.org/x/tools/internal/span"
 )
 
 const (
@@ -41,24 +40,27 @@ const (
 // call the Mark method to add the marker to the global set.
 // You can register the "mark" method to override these in your own call to
 // Expect. The bound Mark function is usable directly in your method map, so
-//    exported.Expect(map[string]interface{}{"mark": exported.Mark})
+//
+//	exported.Expect(map[string]interface{}{"mark": exported.Mark})
+//
 // replicates the built in behavior.
 //
-// Method invocation
+// # Method invocation
 //
 // When invoking a method the expressions in the parameter list need to be
 // converted to values to be passed to the method.
 // There are a very limited set of types the arguments are allowed to be.
-//   expect.Note : passed the Note instance being evaluated.
-//   string : can be supplied either a string literal or an identifier.
-//   int : can only be supplied an integer literal.
-//   *regexp.Regexp : can only be supplied a regular expression literal
-//   token.Pos : has a file position calculated as described below.
-//   token.Position : has a file position calculated as described below.
-//   expect.Range: has a start and end position as described below.
-//   interface{} : will be passed any value
 //
-// Position calculation
+//	expect.Note : passed the Note instance being evaluated.
+//	string : can be supplied either a string literal or an identifier.
+//	int : can only be supplied an integer literal.
+//	*regexp.Regexp : can only be supplied a regular expression literal
+//	token.Pos : has a file position calculated as described below.
+//	token.Position : has a file position calculated as described below.
+//	expect.Range: has a start and end position as described below.
+//	interface{} : will be passed any value
+//
+// # Position calculation
 //
 // There is some extra handling when a parameter is being coerced into a
 // token.Pos, token.Position or Range type argument.
@@ -121,14 +123,31 @@ func (e *Exported) Expect(methods map[string]interface{}) error {
 	return nil
 }
 
-// Range is a type alias for span.Range for backwards compatibility, prefer
-// using span.Range directly.
-type Range = span.Range
+// A Range represents an interval within a source file in go/token notation.
+type Range struct {
+	TokFile    *token.File // non-nil
+	Start, End token.Pos   // both valid and within range of TokFile
+}
+
+// A rangeSetter abstracts a variable that can be set from a Range value.
+//
+// The parameter conversion machinery will automatically construct a
+// variable of type T and call the SetRange method on its address if
+// *T implements rangeSetter. This allows alternative notations of
+// source ranges to interoperate transparently with this package.
+//
+// This type intentionally does not mention Range itself, to avoid a
+// dependency from the application's range type upon this package.
+//
+// Currently this is a secret back door for use only by gopls.
+type rangeSetter interface {
+	SetRange(file *token.File, start, end token.Pos)
+}
 
 // Mark adds a new marker to the known set.
 func (e *Exported) Mark(name string, r Range) {
 	if e.markers == nil {
-		e.markers = make(map[string]span.Range)
+		e.markers = make(map[string]Range)
 	}
 	e.markers[name] = r
 }
@@ -218,22 +237,22 @@ func (e *Exported) getMarkers() error {
 		return nil
 	}
 	// set markers early so that we don't call getMarkers again from Expect
-	e.markers = make(map[string]span.Range)
+	e.markers = make(map[string]Range)
 	return e.Expect(map[string]interface{}{
 		markMethod: e.Mark,
 	})
 }
 
 var (
-	noteType       = reflect.TypeOf((*expect.Note)(nil))
-	identifierType = reflect.TypeOf(expect.Identifier(""))
-	posType        = reflect.TypeOf(token.Pos(0))
-	positionType   = reflect.TypeOf(token.Position{})
-	rangeType      = reflect.TypeOf(span.Range{})
-	spanType       = reflect.TypeOf(span.Span{})
-	fsetType       = reflect.TypeOf((*token.FileSet)(nil))
-	regexType      = reflect.TypeOf((*regexp.Regexp)(nil))
-	exportedType   = reflect.TypeOf((*Exported)(nil))
+	noteType        = reflect.TypeOf((*expect.Note)(nil))
+	identifierType  = reflect.TypeOf(expect.Identifier(""))
+	posType         = reflect.TypeOf(token.Pos(0))
+	positionType    = reflect.TypeOf(token.Position{})
+	rangeType       = reflect.TypeOf(Range{})
+	rangeSetterType = reflect.TypeOf((*rangeSetter)(nil)).Elem()
+	fsetType        = reflect.TypeOf((*token.FileSet)(nil))
+	regexType       = reflect.TypeOf((*regexp.Regexp)(nil))
+	exportedType    = reflect.TypeOf((*Exported)(nil))
 )
 
 // converter converts from a marker's argument parsed from the comment to
@@ -292,17 +311,16 @@ func (e *Exported) buildConverter(pt reflect.Type) (converter, error) {
 			}
 			return reflect.ValueOf(r), remains, nil
 		}, nil
-	case pt == spanType:
+	case reflect.PtrTo(pt).AssignableTo(rangeSetterType):
+		// (*pt).SetRange method exists: call it.
 		return func(n *expect.Note, args []interface{}) (reflect.Value, []interface{}, error) {
 			r, remains, err := e.rangeConverter(n, args)
 			if err != nil {
 				return reflect.Value{}, nil, err
 			}
-			spn, err := r.Span()
-			if err != nil {
-				return reflect.Value{}, nil, err
-			}
-			return reflect.ValueOf(spn), remains, nil
+			v := reflect.New(pt)
+			v.Interface().(rangeSetter).SetRange(r.TokFile, r.Start, r.End)
+			return v.Elem(), remains, nil
 		}, nil
 	case pt == identifierType:
 		return func(n *expect.Note, args []interface{}) (reflect.Value, []interface{}, error) {
@@ -405,9 +423,10 @@ func (e *Exported) buildConverter(pt reflect.Type) (converter, error) {
 	}
 }
 
-func (e *Exported) rangeConverter(n *expect.Note, args []interface{}) (span.Range, []interface{}, error) {
+func (e *Exported) rangeConverter(n *expect.Note, args []interface{}) (Range, []interface{}, error) {
+	tokFile := e.ExpectFileSet.File(n.Pos)
 	if len(args) < 1 {
-		return span.Range{}, nil, fmt.Errorf("missing argument")
+		return Range{}, nil, fmt.Errorf("missing argument")
 	}
 	arg := args[0]
 	args = args[1:]
@@ -416,37 +435,62 @@ func (e *Exported) rangeConverter(n *expect.Note, args []interface{}) (span.Rang
 		// handle the special identifiers
 		switch arg {
 		case eofIdentifier:
-			// end of file identifier, look up the current file
-			f := e.ExpectFileSet.File(n.Pos)
-			eof := f.Pos(f.Size())
-			return span.Range{FileSet: e.ExpectFileSet, Start: eof, End: token.NoPos}, args, nil
+			// end of file identifier
+			eof := tokFile.Pos(tokFile.Size())
+			return newRange(tokFile, eof, eof), args, nil
 		default:
 			// look up an marker by name
 			mark, ok := e.markers[string(arg)]
 			if !ok {
-				return span.Range{}, nil, fmt.Errorf("cannot find marker %v", arg)
+				return Range{}, nil, fmt.Errorf("cannot find marker %v", arg)
 			}
 			return mark, args, nil
 		}
 	case string:
 		start, end, err := expect.MatchBefore(e.ExpectFileSet, e.FileContents, n.Pos, arg)
 		if err != nil {
-			return span.Range{}, nil, err
+			return Range{}, nil, err
 		}
-		if start == token.NoPos {
-			return span.Range{}, nil, fmt.Errorf("%v: pattern %s did not match", e.ExpectFileSet.Position(n.Pos), arg)
+		if !start.IsValid() {
+			return Range{}, nil, fmt.Errorf("%v: pattern %s did not match", e.ExpectFileSet.Position(n.Pos), arg)
 		}
-		return span.Range{FileSet: e.ExpectFileSet, Start: start, End: end}, args, nil
+		return newRange(tokFile, start, end), args, nil
 	case *regexp.Regexp:
 		start, end, err := expect.MatchBefore(e.ExpectFileSet, e.FileContents, n.Pos, arg)
 		if err != nil {
-			return span.Range{}, nil, err
+			return Range{}, nil, err
 		}
-		if start == token.NoPos {
-			return span.Range{}, nil, fmt.Errorf("%v: pattern %s did not match", e.ExpectFileSet.Position(n.Pos), arg)
+		if !start.IsValid() {
+			return Range{}, nil, fmt.Errorf("%v: pattern %s did not match", e.ExpectFileSet.Position(n.Pos), arg)
 		}
-		return span.Range{FileSet: e.ExpectFileSet, Start: start, End: end}, args, nil
+		return newRange(tokFile, start, end), args, nil
 	default:
-		return span.Range{}, nil, fmt.Errorf("cannot convert %v to pos", arg)
+		return Range{}, nil, fmt.Errorf("cannot convert %v to pos", arg)
+	}
+}
+
+// newRange creates a new Range from a token.File and two valid positions within it.
+func newRange(file *token.File, start, end token.Pos) Range {
+	fileBase := file.Base()
+	fileEnd := fileBase + file.Size()
+	if !start.IsValid() {
+		panic("invalid start token.Pos")
+	}
+	if !end.IsValid() {
+		panic("invalid end token.Pos")
+	}
+	if int(start) < fileBase || int(start) > fileEnd {
+		panic(fmt.Sprintf("invalid start: %d not in [%d, %d]", start, fileBase, fileEnd))
+	}
+	if int(end) < fileBase || int(end) > fileEnd {
+		panic(fmt.Sprintf("invalid end: %d not in [%d, %d]", end, fileBase, fileEnd))
+	}
+	if start > end {
+		panic("invalid start: greater than end")
+	}
+	return Range{
+		TokFile: file,
+		Start:   start,
+		End:     end,
 	}
 }

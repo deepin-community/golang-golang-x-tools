@@ -1,0 +1,42 @@
+From: =?utf-8?q?Mart=C3=ADn_Ferrari?= <tincho@debian.org>
+Date: Tue, 17 Nov 2020 02:14:58 +0800
+Subject: Disable static files for present cmd
+
+This path is debian-specific, hence this patch cannot go upstream.
+
+Forwarded: not-needed
+---
+ cmd/present/main.go | 6 +-----
+ 1 file changed, 1 insertion(+), 5 deletions(-)
+
+diff --git a/cmd/present/main.go b/cmd/present/main.go
+index 3400252..a57489e 100644
+--- a/cmd/present/main.go
++++ b/cmd/present/main.go
+@@ -5,7 +5,6 @@
+ package main
+ 
+ import (
+-	"embed"
+ 	"flag"
+ 	"fmt"
+ 	"io/fs"
+@@ -27,9 +26,6 @@ var (
+ 	usePlayground = flag.Bool("use_playground", false, "run code snippets using play.golang.org; if false, run them locally and deliver results by WebSocket transport")
+ )
+ 
+-//go:embed static templates
+-var embedFS embed.FS
+-
+ func main() {
+ 	flag.BoolVar(&present.PlayEnabled, "play", true, "enable playground (permit execution of arbitrary user code)")
+ 	flag.BoolVar(&present.NotesEnabled, "notes", false, "enable presenter notes (press 'N' from the browser to display them)")
+@@ -51,7 +47,7 @@ func main() {
+ 		*contentPath = "./content/"
+ 	}
+ 
+-	var fsys fs.FS = embedFS
++	var fsys fs.FS = os.DirFS("/usr/share/golang-golang-x-tools/present")
+ 	if *basePath != "" {
+ 		fsys = os.DirFS(*basePath)
+ 	}

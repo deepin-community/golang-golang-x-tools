@@ -24,7 +24,6 @@ import (
 // If the selection is a method, 'implements' displays
 // the corresponding methods of the types that would have been reported
 // by an implements query on the receiver type.
-//
 func implements(q *Query) error {
 	lconf := loader.Config{Build: q.Build}
 	allowErrors(&lconf)
@@ -35,12 +34,7 @@ func implements(q *Query) error {
 	}
 
 	// Set the packages to search.
-	if len(q.Scope) > 0 {
-		// Inspect all packages in the analysis scope, if specified.
-		if err := setPTAScope(&lconf, q.Scope); err != nil {
-			return err
-		}
-	} else {
+	{
 		// Otherwise inspect the forward and reverse
 		// transitive closure of the selected package.
 		// (In theory even this is incomplete.)

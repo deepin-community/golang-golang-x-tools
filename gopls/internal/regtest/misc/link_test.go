@@ -8,13 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	. "golang.org/x/tools/internal/lsp/regtest"
-
-	"golang.org/x/tools/internal/testenv"
+	. "golang.org/x/tools/gopls/internal/lsp/regtest"
 )
 
 func TestHoverAndDocumentLink(t *testing.T) {
-	testenv.NeedsGo1Point(t, 13)
 	const program = `
 -- go.mod --
 module mod.test
@@ -31,6 +28,8 @@ package main
 import "import.test/pkg"
 
 func main() {
+	// Issue 43990: this is not a link that most users can open from an LSP
+	// client: mongodb://not.a.link.com
 	println(pkg.Hello)
 }`
 
@@ -50,36 +49,38 @@ const Hello = "Hello"
 		env.OpenFile("main.go")
 		env.OpenFile("go.mod")
 
-		modLink := "https://pkg.go.dev/mod/import.test@v1.2.3?utm_source=gopls"
-		pkgLink := "https://pkg.go.dev/import.test@v1.2.3/pkg?utm_source=gopls"
+		modLink := "https://pkg.go.dev/mod/import.test@v1.2.3"
+		pkgLink := "https://pkg.go.dev/import.test@v1.2.3/pkg"
 
 		// First, check that we get the expected links via hover and documentLink.
-		content, _ := env.Hover("main.go", env.RegexpSearch("main.go", "pkg.Hello"))
+		content, _ := env.Hover(env.RegexpSearch("main.go", "pkg.Hello"))
 		if content == nil || !strings.Contains(content.Value, pkgLink) {
 			t.Errorf("hover: got %v in main.go, want contains %q", content, pkgLink)
 		}
-		content, _ = env.Hover("go.mod", env.RegexpSearch("go.mod", "import.test"))
+		content, _ = env.Hover(env.RegexpSearch("go.mod", "import.test"))
 		if content == nil || !strings.Contains(content.Value, pkgLink) {
 			t.Errorf("hover: got %v in go.mod, want contains %q", content, pkgLink)
 		}
 		links := env.DocumentLink("main.go")
-		if len(links) != 1 || links[0].Target != pkgLink {
-			t.Errorf("documentLink: got %v for main.go, want link to %q", links, pkgLink)
+		if len(links) != 1 || *links[0].Target != pkgLink {
+			t.Errorf("documentLink: got links %+v for main.go, want one link with target %q", links, pkgLink)
 		}
 		links = env.DocumentLink("go.mod")
-		if len(links) != 1 || links[0].Target != modLink {
-			t.Errorf("documentLink: got %v for go.mod, want link to %q", links, modLink)
+		if len(links) != 1 || *links[0].Target != modLink {
+			t.Errorf("documentLink: got links %+v for go.mod, want one link with target %q", links, modLink)
 		}
 
 		// Then change the environment to make these links private.
-		env.ChangeEnv(map[string]string{"GOPRIVATE": "import.test"})
+		cfg := env.Editor.Config()
+		cfg.Env = map[string]string{"GOPRIVATE": "import.test"}
+		env.ChangeConfiguration(cfg)
 
 		// Finally, verify that the links are gone.
-		content, _ = env.Hover("main.go", env.RegexpSearch("main.go", "pkg.Hello"))
+		content, _ = env.Hover(env.RegexpSearch("main.go", "pkg.Hello"))
 		if content == nil || strings.Contains(content.Value, pkgLink) {
 			t.Errorf("hover: got %v in main.go, want non-empty hover without %q", content, pkgLink)
 		}
-		content, _ = env.Hover("go.mod", env.RegexpSearch("go.mod", "import.test"))
+		content, _ = env.Hover(env.RegexpSearch("go.mod", "import.test"))
 		if content == nil || strings.Contains(content.Value, modLink) {
 			t.Errorf("hover: got %v in go.mod, want contains %q", content, modLink)
 		}
